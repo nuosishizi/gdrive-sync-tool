@@ -80,12 +80,16 @@ class RcloneWrapper:
     def get_version(self) -> str:
         """获取rclone版本"""
         try:
+            kwargs = {}
+            if os.name == 'nt':
+                kwargs['creationflags'] = 0x08000000 # CREATE_NO_WINDOW
+                
             result = subprocess.run(
                 [self.rclone_path, "version"],
                 capture_output=True,
                 text=True,
                 timeout=5,
-                creationflags=0x08000000 # CREATE_NO_WINDOW
+                **kwargs
             )
             return result.stdout.split('\n')[0] if result.returncode == 0 else "Unknown"
         except Exception as e:
@@ -250,13 +254,17 @@ client_secret = {client_secret}
     def test_remote(self, remote_name: str) -> bool:
         """测试远程连接"""
         try:
+            kwargs = {}
+            if os.name == 'nt':
+                kwargs['creationflags'] = 0x08000000 # CREATE_NO_WINDOW
+                
             result = subprocess.run(
                 [self.rclone_path, "lsd", f"{remote_name}:", "--config", self.config_path, "--max-depth", "1"],
                 capture_output=True,
                 encoding='utf-8',  # 使用 UTF-8 编码
                 errors='ignore',   # 忽略编码错误
                 timeout=3,  # 减少到3秒避免卡顿
-                creationflags=0x08000000 # CREATE_NO_WINDOW
+                **kwargs
             )
             
             if result.returncode == 0:
@@ -283,6 +291,10 @@ client_secret = {client_secret}
         """
         try:
             # 使用 lsjson 获取JSON格式的文件列表
+            kwargs = {}
+            if os.name == 'nt':
+                kwargs['creationflags'] = 0x08000000 # CREATE_NO_WINDOW
+                
             result = subprocess.run(
                 [
                     self.rclone_path, "lsjson",
@@ -294,7 +306,7 @@ client_secret = {client_secret}
                 capture_output=True,
                 text=True,
                 timeout=30,
-                creationflags=0x08000000 # CREATE_NO_WINDOW
+                **kwargs
             )
             
             if result.returncode == 0:
@@ -382,6 +394,10 @@ client_secret = {client_secret}
             print(f"[Rclone] 执行命令: {' '.join(cmd)}")
             
             # 启动进程
+            kwargs = {}
+            if os.name == 'nt':
+                kwargs['creationflags'] = 0x08000000 # CREATE_NO_WINDOW
+
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -389,7 +405,7 @@ client_secret = {client_secret}
                 encoding='utf-8',  # 强制使用 UTF-8
                 errors='ignore',   # 忽略无法解码的字符
                 bufsize=1,
-                creationflags=0x08000000 # CREATE_NO_WINDOW
+                **kwargs
             )
             
             # 读取输出

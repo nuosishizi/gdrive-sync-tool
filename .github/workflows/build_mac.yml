@@ -23,6 +23,7 @@ jobs:
           
       - name: Install dependencies
         run: |
+          pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
           
@@ -41,8 +42,16 @@ jobs:
           echo "Downloading rclone for $ARCH..."
           curl -O https://downloads.rclone.org/rclone-current-osx-$RCLONE_ARCH.zip
           unzip -q rclone-current-osx-$RCLONE_ARCH.zip
+          
           # Move executable to current dir and rename to simple 'rclone'
+          # Ensure we find the binary
           find . -name "rclone" -type f -exec mv {} ./rclone \;
+          
+          if [ ! -f "./rclone" ]; then
+              echo "Error: rclone binary not found after extraction"
+              exit 1
+          fi
+          
           chmod +x rclone
           ./rclone --version
           
