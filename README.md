@@ -97,6 +97,27 @@ A: 点击"重新授权"按钮，重新完成授权流程。
 
 MIT License
 
+## macOS 支持
+
+本项目支持通过 GitHub Actions 进行 macOS 版本的自动化构建。
+
+### 如何构建 macOS 版本
+
+1.  将代码推送到 GitHub。
+2.  创建一个以 `v` 开头的 Tag（例如 `v1.0.0`），推送到 GitHub。
+    ```bash
+    git tag v1.0.0
+    git push origin v1.0.0
+    ```
+3.  GitHub Actions 会自动触发构建流程，并在 `Actions` 页面生成 `GDriveSync-macOS.zip`。
+4.  下载并解压，运行其中的 `GDriveSync.app`。
+
+### 注意事项
+
+-   由于没有开发者签名，首次打开应用时可能需要：
+    1.  如果提示无法打开，请在“系统设置” -> “隐私与安全性”中点击“仍要打开”。
+    2.  或者在 Finder 中右键点击应用，选择“打开”，然后在弹出的对话框中再次点击“打开”。
+
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request！

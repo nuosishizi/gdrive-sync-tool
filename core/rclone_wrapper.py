@@ -27,24 +27,52 @@ class RcloneStats:
 class RcloneWrapper:
     """Rclone包装器 - 通过subprocess调用rclone.exe"""
     
-    def __init__(self, rclone_path: str = "rclone.exe", config_path: str = "config/rclone.conf"):
+    def __init__(self, rclone_path: str = None, config_path: str = "config/rclone.conf"):
         """
         初始化Rclone包装器
         
         Args:
-            rclone_path: rclone.exe的路径
+            rclone_path: rclone.exe的路径 (默认自动检测)
             config_path: rclone配置文件路径
         """
-        self.rclone_path = rclone_path
+        import sys
+        
+        # 自动确定默认文件名
+        if rclone_path is None:
+            if os.name == 'nt':
+                default_name = "rclone.exe"
+            else:
+                default_name = "rclone"
+            self.rclone_path = default_name
+        else:
+            self.rclone_path = rclone_path
+            
+        # 检查是否在 PyInstaller 打包环境中
+        if getattr(sys, 'frozen', False):
+            # 如果是打包环境，尝试在临时目录中查找
+            if hasattr(sys, '_MEIPASS'):
+                bundled_path = os.path.join(sys._MEIPASS, self.rclone_path)
+                if os.path.exists(bundled_path):
+                    self.rclone_path = bundled_path
+            # 或者在可执行文件同级目录查找
+            elif os.path.exists(os.path.join(os.path.dirname(sys.executable), self.rclone_path)):
+                self.rclone_path = os.path.join(os.path.dirname(sys.executable), self.rclone_path)
+                
         self.config_path = config_path
         self.process = None
         self.is_paused = False
         
-        # 验证rclone.exe存在
+        # 验证rclone存在
         if not os.path.exists(self.rclone_path):
-            raise FileNotFoundError(f"Rclone未找到: {self.rclone_path}")
+            # 尝试在系统路径中查找
+            import shutil
+            if shutil.which(self.rclone_path):
+                self.rclone_path = shutil.which(self.rclone_path)
+            else:
+                # 仅作为警告，不抛出异常，允许后续配置
+                print(f"[Warning] Rclone未找到: {self.rclone_path}")
         
-        print(f"[Rclone] 已找到: {self.rclone_path}")
+        print(f"[Rclone] 使用路径: {self.rclone_path}")
         
         # 确保配置目录存在
         os.makedirs(os.path.dirname(self.config_path) if os.path.dirname(self.config_path) else "config", exist_ok=True)
