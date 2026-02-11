@@ -1,0 +1,152 @@
+"""
+Google Drive 文件夹树 - 辅助方法
+"""
+
+def create_gdrive_tree_panel_method(self):
+    """创建 Google Drive 文件夹树面板"""
+    from PyQt6.QtWidgets import QWidget, QVBoxLayout, QGroupBox, QTreeWidget, QTreeWidgetItem, QPushButton, QHBoxLayout
+    from PyQt6.QtCore import Qt
+    
+    panel = QWidget()
+    layout = QVBoxLayout()
+    panel.setLayout(layout)
+    
+    # 标题
+    group = QGroupBox("📁 Google Drive 来源")
+    group_layout = QVBoxLayout()
+    
+    # 树形控件
+    self.gdrive_tree = QTreeWidget()
+    self.gdrive_tree.setHeaderLabel("文件夹结构")
+    group_layout.addWidget(self.gdrive_tree)
+    
+    # 按钮
+    button_layout = QHBoxLayout()
+    
+    refresh_button = QPushButton("🔄 刷新")
+    refresh_button.clicked.connect(lambda: self.load_gdrive_root())
+    button_layout.addWidget(refresh_button)
+    
+    button_layout.addStretch()
+    
+    sync_all_button = QPushButton("✓ 同步整个网盘")
+    sync_all_button.clicked.connect(lambda: self.select_folder_from_tree_embedded("root", "整个网盘"))
+    button_layout.addWidget(sync_all_button)
+    
+    group_layout.addLayout(button_layout)
+    group.setLayout(group_layout)
+    layout.addWidget(group)
+    
+    return panel
+
+
+def load_gdrive_root_method(self):
+    """加载 Google Drive 根目录"""
+    if not self.rclone_wrapper:
+        self.log("请先授权 Rclone", "⚠")
+        return
+    
+    from PyQt6.QtWidgets import QTreeWidgetItem
+    from PyQt6.QtCore import Qt
+    
+    self.gdrive_tree.clear()
+    self.log("正在加载 Google Drive...", "📂")
+    
+    # 添加根节点
+    root_item = QTreeWidgetItem(self.gdrive_tree)
+    root_item.setText(0, "📁 我的云端硬盘")
+    root_item.setData(0, Qt.ItemDataRole.UserRole, {'id': 'root', 'name': '我的云端硬盘'})
+    
+    # 加载子文件夹
+    self.load_subfolders_embedded(root_item, "root")
+    root_item.setExpanded(True)
+    
+    self.log("✓ Google Drive 加载完成", "✓")
+
+
+def load_subfolders_embedded_method(self, parent_item, folder_id):
+    """延迟加载子文件夹（嵌入式版本）"""
+    import subprocess
+    from PyQt6.QtWidgets import QTreeWidgetItem
+    from PyQt6.QtCore import Qt
+    
+    # 构建命令
+    cmd = [
+        self.rclone_wrapper.rclone_path,
+        "lsjson",
+        "gdrive:",
+        "--dirs-only",
+        "--config", self.rclone_wrapper.config_path,
+        "--max-depth", "1"
+    ]
+    
+    if folder_id and folder_id != "root":
+        cmd.extend(["--drive-root-folder-id", folder_id])
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            encoding='utf-8',
+            errors='ignore',
+            timeout=15
+        )
+        
+        if result.returncode == 0:
+            import json
+            folders = json.loads(result.stdout)
+            
+            for folder in folders:
+                folder_name = folder.get('Name', '')
+                folder_id_sub = folder.get('ID', '')
+                
+                # 创建子节点
+                child_item = QTreeWidgetItem(parent_item)
+                child_item.setText(0, f"📁 {folder_name}")
+                child_item.setData(0, Qt.ItemDataRole.UserRole, {
+                    'id': folder_id_sub,
+                    'name': folder_name
+                })
+                
+                # 添加占位符
+                placeholder = QTreeWidgetItem(child_item)
+                placeholder.setText(0, "...")
+                
+    except Exception as e:
+        self.log(f"加载子文件夹失败: {e}", "⚠")
+
+
+def on_tree_item_expanded_method(self, item):
+    """展开节点时加载子文件夹（嵌入式版本）"""
+    from PyQt6.QtCore import Qt
+    
+    # 检查是否已加载
+    if item.childCount() == 1 and item.child(0).text(0) == "...":
+        # 删除占位符
+        item.takeChild(0)
+        
+        # 加载真实数据
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if data and isinstance(data, dict):
+            folder_id = data['id']
+            self.load_subfolders_embedded(item, folder_id)
+
+
+def on_tree_item_clicked_method(self, item, column):
+    """点击树节点自动选择"""
+    from PyQt6.QtCore import Qt
+    
+    data = item.data(0, Qt.ItemDataRole.UserRole)
+    if data and isinstance(data, dict):
+        folder_id = data['id']
+        folder_name = data['name']
+        self.select_folder_from_tree_embedded(folder_id, folder_name)
+
+
+def select_folder_from_tree_embedded_method(self, folder_id, folder_name):
+    """从嵌入式树中选择文件夹"""
+    # 存储选择的文件夹ID
+    self.selected_gdrive_folder_id = folder_id
+    self.selected_gdrive_folder_name = folder_name
+    
+    self.log(f"✓ 已选择来源: {folder_name}", "✓")
