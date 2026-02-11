@@ -63,9 +63,15 @@ jobs:
           pyinstaller --noconfirm --onedir --windowed --name "GDriveSync" \
             --add-binary "rclone:." \
             --hidden-import "PyQt6" \
+            --hidden-import "PyQt6.QtCore" \
+            --hidden-import "PyQt6.QtGui" \
+            --hidden-import "PyQt6.QtWidgets" \
             --hidden-import "google.auth" \
+            --hidden-import "google.oauth2" \
             --hidden-import "googleapiclient" \
             --collect-all "google_auth_oauthlib" \
+            --collect-all "googleapiclient" \
+            --collect-all "google.auth" \
             main.py
             
       - name: Zip Bundle
