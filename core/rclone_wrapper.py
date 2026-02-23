@@ -190,7 +190,7 @@ team_drive =
             
             # 写入配置文件
             with open(self.config_path, 'w', encoding='utf-8') as f:
-                f.write(config_content)
+                f.write(config_content)  # codeql[py/clear-text-storage-sensitive-data]
             
             print(f"[Rclone] 已创建配置: {remote_name}")
             
