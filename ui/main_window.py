@@ -132,40 +132,39 @@ class MainWindow(QMainWindow):
                 # 开发环境下
                 rclone_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rclone.exe")
             
-            if os.path.exists(rclone_path):
-                self.rclone_wrapper = RcloneWrapper(
-                    rclone_path=rclone_path,
-                    config_path="config/rclone.conf"
-                )
-                version = self.rclone_wrapper.get_version()
-                self.log(f"Rclone已就绪: {version}", "✓")
-                self.log(f"Rclone路径: {rclone_path}", "ℹ")
+            # 不提前判断是否存在，直接初始化，让RcloneWrapper去处理自动下载
+            self.log(f"正在初始化并在必要时自动部署 Rclone...", "⚙")
+            self.rclone_wrapper = RcloneWrapper(
+                rclone_path=rclone_path,
+                config_path="config/rclone.conf"
+            )
+            version = self.rclone_wrapper.get_version()
+            self.log(f"Rclone已就绪: {version}", "✓")
+            self.log(f"Rclone路径: {self.rclone_wrapper.rclone_path}", "ℹ")
+            
+            # 检查是否已有配置（不测试连接，避免超时）
+            if os.path.exists(self.rclone_wrapper.config_path):
+                self.log("✓ Rclone 配置已存在", "✓")
                 
-                # 检查是否已有配置（不测试连接，避免超时）
-                if os.path.exists(self.rclone_wrapper.config_path):
-                    self.log("✓ Rclone 配置已存在", "✓")
-                    
-                    # 获取用户信息（快速）
-                    user_info = self.rclone_wrapper.get_user_info("gdrive")
-                    email = user_info.get("email", "")
-                    
-                    if email:
-                        self.log(f"✓ 已授权账号: {email}", "✓")
-                        self.auth_status_label.setText(f"● 已连接: {email}")
-                        self.auth_status_label.setStyleSheet("color: green; font-weight: bold;")
-                    else:
-                        self.log("配置存在但无用户信息", "⚠")
-                        self.auth_status_label.setText("● 已配置（未验证）")
-                        self.auth_status_label.setStyleSheet("color: orange;")
-                    
-                    # 直接启用所有功能（不测试连接）
-                    self.start_button.setEnabled(True)
-                    self.preview_button.setEnabled(True)
-                    self.rclone_auth_button.setText("🔄 重新授权")
+                # 获取用户信息（快速）
+                user_info = self.rclone_wrapper.get_user_info("gdrive")
+                email = user_info.get("email", "")
+                
+                if email:
+                    self.log(f"✓ 已授权账号: {email}", "✓")
+                    self.auth_status_label.setText(f"● 已连接: {email}")
+                    self.auth_status_label.setStyleSheet("color: green; font-weight: bold;")
                 else:
-                    self.log("未找到 Rclone 配置，请先授权", "ℹ")
+                    self.log("配置存在但无用户信息", "⚠")
+                    self.auth_status_label.setText("● 已配置（未验证）")
+                    self.auth_status_label.setStyleSheet("color: orange;")
+                
+                # 直接启用所有功能（不测试连接）
+                self.start_button.setEnabled(True)
+                self.preview_button.setEnabled(True)
+                self.rclone_auth_button.setText("🔄 重新授权")
             else:
-                self.log(f"未找到rclone.exe: {rclone_path}", "⚠")
+                self.log("未找到 Rclone 配置，请先授权", "ℹ")
                 
         except Exception as e:
             self.log(f"Rclone初始化失败: {e}", "✗")
