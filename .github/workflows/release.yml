@@ -33,13 +33,11 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
         
-    - name: Build Windows
+    - name: Build Windows (Installer)
       if: matrix.os == 'windows-latest'
       run: |
         pyinstaller GDriveSync.spec
-        mkdir dist\release
-        copy dist\GDriveSync.exe dist\release\
-        Compress-Archive -Path dist\release\* -DestinationPath dist\GDriveSync-Windows.zip
+        iscc installer.iss
         
     - name: Build macOS
       if: matrix.os == 'macos-latest'
@@ -55,7 +53,7 @@ jobs:
       if: matrix.os == 'windows-latest'
       uses: actions/attest-build-provenance@v2
       with:
-        subject-path: 'dist/GDriveSync-Windows.zip'
+        subject-path: 'dist/GDriveSync-Windows-Setup.exe'
         
     - name: Attest Build Provenance (macOS)
       if: matrix.os == 'macos-latest'
@@ -67,7 +65,7 @@ jobs:
       if: matrix.os == 'windows-latest'
       uses: softprops/action-gh-release@v2
       with:
-        files: dist/GDriveSync-Windows.zip
+        files: dist/GDriveSync-Windows-Setup.exe
         generate_release_notes: true
         
     - name: Upload to Release (macOS)
