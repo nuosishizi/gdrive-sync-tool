@@ -134,10 +134,41 @@ class MainWindow(QMainWindow):
             
             # 不提前判断是否存在，直接初始化，让RcloneWrapper去处理自动下载
             self.log(f"正在初始化并在必要时自动部署 Rclone...", "⚙")
+            
+            from PyQt6.QtWidgets import QProgressDialog, QApplication
+            from PyQt6.QtCore import Qt
+            
+            progress_dialog = None
+            
+            def download_cb(status, current, total):
+                nonlocal progress_dialog
+                if not progress_dialog:
+                    progress_dialog = QProgressDialog("正在为您首次下载依赖 (rclone)...", "取消", 0, total, self)
+                    progress_dialog.setWindowTitle("下载必要组件")
+                    progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+                    progress_dialog.setMinimumDuration(0)
+                    progress_dialog.show()
+
+                if status == "downloading":
+                    if total > 0:
+                        progress_dialog.setMaximum(total)
+                        progress_dialog.setValue(current)
+                elif status == "extracting":
+                    progress_dialog.setLabelText("正在解压组件，请稍候...")
+                    progress_dialog.setMaximum(0)
+                    progress_dialog.setValue(0)
+                    
+                QApplication.processEvents()
+            
             self.rclone_wrapper = RcloneWrapper(
                 rclone_path=rclone_path,
-                config_path="config/rclone.conf"
+                config_path="config/rclone.conf",
+                download_callback=download_cb
             )
+            
+            if progress_dialog:
+                progress_dialog.close()
+                
             version = self.rclone_wrapper.get_version()
             self.log(f"Rclone已就绪: {version}", "✓")
             self.log(f"Rclone路径: {self.rclone_wrapper.rclone_path}", "ℹ")

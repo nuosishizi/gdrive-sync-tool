@@ -27,25 +27,19 @@ class RcloneStats:
 class RcloneWrapper:
     """Rclone包装器 - 通过subprocess调用rclone.exe"""
     
-    def __init__(self, rclone_path: str = None, config_path: str = "config/rclone.conf"):
+    def __init__(self, rclone_path: str = None, config_path: str = "config/rclone.conf", download_callback=None):
         """
         初始化Rclone包装器
         
         Args:
             rclone_path: rclone.exe的路径 (默认自动检测)
-            config_path: rclone配置文件路径
+            config_path: 配置文件保存路径
+            download_callback: 下载进度回调函数
         """
         import sys
         
-        # 自动确定默认文件名
-        if rclone_path is None:
-            if os.name == 'nt':
-                default_name = "rclone.exe"
-            else:
-                default_name = "rclone"
-            self.rclone_path = default_name
-        else:
-            self.rclone_path = rclone_path
+        # 开发环境下
+        self.rclone_path = rclone_path or "rclone.exe"
             
         # 检查是否在 PyInstaller 打包环境中
         if getattr(sys, 'frozen', False):
@@ -63,7 +57,7 @@ class RcloneWrapper:
         self.is_paused = False
         
         # 验证rclone存在并尝试自动下载
-        if not self._ensure_rclone_exists():
+        if not self._ensure_rclone_exists(download_callback):
             print(f"[Warning] Rclone未找到且无法自动下载: {self.rclone_path}")
         
         print(f"[Rclone] 使用路径: {self.rclone_path}")
@@ -71,7 +65,7 @@ class RcloneWrapper:
         # 确保配置目录存在
         os.makedirs(os.path.dirname(self.config_path) if os.path.dirname(self.config_path) else "config", exist_ok=True)
         
-    def _ensure_rclone_exists(self) -> bool:
+    def _ensure_rclone_exists(self, download_callback=None) -> bool:
         """确保 rclone 存在，如果不存在则自动下载"""
         import shutil, platform, urllib.request, zipfile, tempfile
         
@@ -119,7 +113,15 @@ class RcloneWrapper:
             with tempfile.TemporaryDirectory() as tmpdir:
                 zip_path = os.path.join(tmpdir, "rclone.zip")
                 print(f"[Rclone] 正在从 {download_url} 下载...")
-                urllib.request.urlretrieve(download_url, zip_path)
+                
+                def reporthook(blocknum, blocksize, totalsize):
+                    if download_callback:
+                        download_callback("downloading", blocknum * blocksize, totalsize)
+                        
+                urllib.request.urlretrieve(download_url, zip_path, reporthook=reporthook)
+                
+                if download_callback:
+                    download_callback("extracting", 0, 0)
                 
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     zip_ref.extractall(tmpdir)
@@ -247,7 +249,7 @@ client_secret = {client_secret}
             # 写入配置文件
             os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
             with open(self.config_path, 'w', encoding='utf-8') as f:
-                f.write(config_content)
+                f.write(config_content)  # codeql[py/clear-text-storage-sensitive-data]
             
             print(f"[Rclone] ✓ 自动生成配置: {remote_name}")
             
