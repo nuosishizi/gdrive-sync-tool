@@ -62,20 +62,87 @@ class RcloneWrapper:
         self.process = None
         self.is_paused = False
         
-        # 验证rclone存在
-        if not os.path.exists(self.rclone_path):
-            # 尝试在系统路径中查找
-            import shutil
-            if shutil.which(self.rclone_path):
-                self.rclone_path = shutil.which(self.rclone_path)
-            else:
-                # 仅作为警告，不抛出异常，允许后续配置
-                print(f"[Warning] Rclone未找到: {self.rclone_path}")
+        # 验证rclone存在并尝试自动下载
+        if not self._ensure_rclone_exists():
+            print(f"[Warning] Rclone未找到且无法自动下载: {self.rclone_path}")
         
         print(f"[Rclone] 使用路径: {self.rclone_path}")
         
         # 确保配置目录存在
         os.makedirs(os.path.dirname(self.config_path) if os.path.dirname(self.config_path) else "config", exist_ok=True)
+        
+    def _ensure_rclone_exists(self) -> bool:
+        """确保 rclone 存在，如果不存在则自动下载"""
+        import shutil, platform, urllib.request, zipfile, tempfile
+        
+        # 1. 检查当前设定的路径是否存在
+        if os.path.exists(self.rclone_path):
+            return True
+            
+        # 2. 检查系统环境变量 PATH 中是否存在
+        if shutil.which(self.rclone_path):
+            self.rclone_path = shutil.which(self.rclone_path)
+            return True
+            
+        # 3. 检查系统环境变量 PATH 中是否存在去掉后缀的命令
+        if shutil.which("rclone"):
+            self.rclone_path = shutil.which("rclone")
+            return True
+            
+        # 4. 自动下载
+        print(f"[Rclone] 未找到 {self.rclone_path}，正在尝试自动下载以支持当前系统...")
+        try:
+            sys_os = platform.system().lower()
+            machine = platform.machine().lower()
+            
+            # 判断架构
+            if machine in ['x86_64', 'amd64']: arch = 'amd64'
+            elif machine in ['arm64', 'aarch64']: arch = 'arm64'
+            elif machine in ['i386', 'x86']: arch = '386'
+            else: arch = 'amd64'
+            
+            # 判断系统
+            if sys_os == 'windows': 
+                os_name = 'windows'
+                bin_name = 'rclone.exe'
+            elif sys_os == 'darwin': 
+                os_name = 'osx'
+                bin_name = 'rclone'
+            else: 
+                os_name = 'linux'
+                bin_name = 'rclone'
+                
+            # 下载最新稳定版 rclone
+            # rclone官方提供了统一的 zip 下载方式：https://downloads.rclone.org/v1.73.0/rclone-v1.73.0-windows-amd64.zip
+            download_url = f"https://downloads.rclone.org/v1.73.0/rclone-v1.73.0-{os_name}-{arch}.zip"
+            
+            with tempfile.TemporaryDirectory() as tmpdir:
+                zip_path = os.path.join(tmpdir, "rclone.zip")
+                print(f"[Rclone] 正在从 {download_url} 下载...")
+                urllib.request.urlretrieve(download_url, zip_path)
+                
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(tmpdir)
+                
+                # 在解压出的文件夹中寻找可执行文件
+                for root, dirs, files in os.walk(tmpdir):
+                    if bin_name in files:
+                        src_bin = os.path.join(root, bin_name)
+                        ds_bin = os.path.join(os.getcwd(), bin_name)
+                        shutil.copy2(src_bin, ds_bin)
+                        
+                        # 赋予执行权限 (macOS/Linux)
+                        if sys_os != 'windows':
+                            os.chmod(ds_bin, 0o755)
+                            
+                        self.rclone_path = ds_bin
+                        print(f"[Rclone] ✓ 自动下载并部署成功: {self.rclone_path}")
+                        return True
+                        
+            return False
+        except Exception as e:
+            print(f"[Rclone] 自动下载失败: {e}")
+            return False
     
     def get_version(self) -> str:
         """获取rclone版本"""

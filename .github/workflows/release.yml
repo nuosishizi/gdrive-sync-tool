@@ -32,35 +32,18 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
         
-    - name: Download rclone (Windows)
-      if: matrix.os == 'windows-latest'
-      run: |
-        Invoke-WebRequest -Uri "https://downloads.rclone.org/v1.73.0/rclone-v1.73.0-windows-amd64.zip" -OutFile "rclone.zip"
-        Expand-Archive -Path rclone.zip -DestinationPath .
-        Move-Item -Path "rclone-v1.73.0-windows-amd64\rclone.exe" -Destination "rclone.exe"
-        
-    - name: Download rclone (macOS)
-      if: matrix.os == 'macos-latest'
-      run: |
-        curl -O https://downloads.rclone.org/v1.73.0/rclone-v1.73.0-osx-amd64.zip
-        unzip -q rclone-v1.73.0-osx-amd64.zip
-        mv rclone-v1.73.0-osx-amd64/rclone ./rclone
-        chmod +x rclone
-
     - name: Build Windows
       if: matrix.os == 'windows-latest'
       run: |
         pyinstaller GDriveSync.spec
         mkdir dist\release
         copy dist\GDriveSync.exe dist\release\
-        copy rclone.exe dist\release\
         Compress-Archive -Path dist\release\* -DestinationPath dist\GDriveSync-Windows.zip
         
     - name: Build macOS
       if: matrix.os == 'macos-latest'
       run: |
         pyinstaller --noconfirm --onedir --windowed --name "GDriveSync" \
-          --add-binary "rclone:." \
           --hidden-import "googleapiclient" \
           --collect-all "google_auth_oauthlib" \
           main.py

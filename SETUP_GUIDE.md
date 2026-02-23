@@ -18,6 +18,8 @@ cd C:\path\to\gdrive-sync-tool
 pip install -r requirements.txt
 ```
 
+> **注意：** 该工具依赖 `rclone` 执行下载。程序**会在首次执行时自动为您下载对应平台（Windows/macOS/Linux）的版本**。如果您已经在系统 PATH 配置过 `rclone` 或者将可执行文件放置在了项目根目录，程序将跳过下载并直接使用本地。
+
 ## 第三步：配置 Google Drive API
 
 ### 3.1 创建 Google Cloud 项目
@@ -134,14 +136,14 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 ## 打包为 EXE（可选）
 
-如果想打包为独立的 .exe 文件：
+生成独立的 .exe（Windows）或 .app（macOS） 文件：
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --windowed --name="GDriveSync" main.py
+pyinstaller --noconfirm --onedir --windowed --name="GDriveSync" main.py
 ```
 
-生成的 .exe 在 `dist/` 文件夹中。
+生成的发行版在 `dist/` 文件夹中。程序发行版不包含 `rclone`，首次运行时会根据不同平台**自动下载它**。
 
 ## 支持
 

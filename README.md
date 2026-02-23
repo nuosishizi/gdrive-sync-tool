@@ -21,6 +21,8 @@
 pip install -r requirements.txt
 ```
 
+> **说明**: 本同步工具底层依赖 [rclone](https://rclone.org/)。您无需手动安装，如果不手动配置，程序在初次建立同步时**会自动检测您的系统架构并从官方下载**对应的最新版本（支持 Windows / macOS / Linux）。如果您已经安装了 `rclone` 且已在 PATH 环境变量中，程序也会直接使用它。
+
 ## 配置 Google Drive API
 
 1. 访问 [Google Cloud Console](https://console.cloud.google.com/)
