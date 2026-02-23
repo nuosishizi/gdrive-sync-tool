@@ -1,0 +1,94 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      id-token: write
+      contents: write
+      attestations: write
+      
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+        
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+        
+    - name: Download rclone (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        Invoke-WebRequest -Uri "https://downloads.rclone.org/v1.73.0/rclone-v1.73.0-windows-amd64.zip" -OutFile "rclone.zip"
+        Expand-Archive -Path rclone.zip -DestinationPath .
+        Move-Item -Path "rclone-v1.73.0-windows-amd64\rclone.exe" -Destination "rclone.exe"
+        
+    - name: Download rclone (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        curl -O https://downloads.rclone.org/v1.73.0/rclone-v1.73.0-osx-amd64.zip
+        unzip -q rclone-v1.73.0-osx-amd64.zip
+        mv rclone-v1.73.0-osx-amd64/rclone ./rclone
+        chmod +x rclone
+
+    - name: Build Windows
+      if: matrix.os == 'windows-latest'
+      run: |
+        pyinstaller GDriveSync.spec
+        mkdir dist\release
+        copy dist\GDriveSync.exe dist\release\
+        copy rclone.exe dist\release\
+        Compress-Archive -Path dist\release\* -DestinationPath dist\GDriveSync-Windows.zip
+        
+    - name: Build macOS
+      if: matrix.os == 'macos-latest'
+      run: |
+        pyinstaller --noconfirm --onedir --windowed --name "GDriveSync" \
+          --add-binary "rclone:." \
+          --hidden-import "googleapiclient" \
+          --collect-all "google_auth_oauthlib" \
+          main.py
+        cd dist
+        zip -r GDriveSync-macOS.zip GDriveSync.app
+        
+    - name: Attest Build Provenance (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: actions/attest-build-provenance@v2
+      with:
+        subject-path: 'dist/GDriveSync-Windows.zip'
+        
+    - name: Attest Build Provenance (macOS)
+      if: matrix.os == 'macos-latest'
+      uses: actions/attest-build-provenance@v2
+      with:
+        subject-path: 'dist/GDriveSync-macOS.zip'
+        
+    - name: Upload to Release (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: softprops/action-gh-release@v2
+      with:
+        files: dist/GDriveSync-Windows.zip
+        generate_release_notes: true
+        
+    - name: Upload to Release (macOS)
+      if: matrix.os == 'macos-latest'
+      uses: softprops/action-gh-release@v2
+      with:
+        files: dist/GDriveSync-macOS.zip
+        generate_release_notes: true
