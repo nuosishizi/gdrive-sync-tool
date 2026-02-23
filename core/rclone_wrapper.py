@@ -178,17 +178,37 @@ class RcloneWrapper:
             是否成功
         """
         try:
-            # 构建rclone配置
-            cfg_text = f"[{remote_name}]\ntype = drive\nclient_id = {app_id}\nclient_secret = {app_key}\nscope = drive\ntoken = {auth_data}\nteam_drive = \n"
+            import subprocess
+            import os
             
-            # 写入配置文件
-            with open(self.config_path, 'w', encoding='utf-8') as fs:
-                fs.write(cfg_text)
+            os.makedirs(os.path.dirname(self.config_path) if os.path.dirname(self.config_path) else ".", exist_ok=True)
             
-            print(f"[Rclone] 已创建配置: {remote_name}")
+            cmd = [
+                self.rclone_path, 
+                "--config", self.config_path, 
+                "config", "create", 
+                remote_name, "drive", 
+                "scope", "drive", 
+                "token", auth_data
+            ]
             
-            # 测试连接
-            return self.test_remote(remote_name)
+            if app_id and app_key:
+                cmd.extend(["client_id", app_id, "client_secret", app_key])
+                
+            # 隐藏命令行窗口
+            startupinfo = None
+            if os.name == 'nt':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                
+            result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
+            
+            if result.returncode == 0:
+                print(f"[Rclone] 已创建配置: {remote_name}")
+                return self.test_remote(remote_name)
+            else:
+                print(f"[Rclone] 设置远程失败: {result.stderr}")
+                return False
             
         except Exception as e:
             print(f"[Rclone] 设置远程失败: {e}")
@@ -226,22 +246,35 @@ class RcloneWrapper:
             app_id = creds.client_id or ""
             app_key = creds.client_secret or ""
             
-            # 构建rclone配置
-            cfg_text = f"[{remote_name}]\ntype = drive\nscope = drive\ntoken = {token_json}\n"
+            import subprocess
+            import os
+            os.makedirs(os.path.dirname(self.config_path) if os.path.dirname(self.config_path) else ".", exist_ok=True)
             
-            # 如果有client credentials，添加它们
+            cmd = [
+                self.rclone_path, 
+                "--config", self.config_path, 
+                "config", "create", 
+                remote_name, "drive", 
+                "scope", "drive", 
+                "token", token_json
+            ]
+            
             if app_id and app_key:
-                cfg_text += f"client_id = {app_id}\nclient_secret = {app_key}\n"
+                cmd.extend(["client_id", app_id, "client_secret", app_key])
+                
+            startupinfo = None
+            if os.name == 'nt':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                
+            result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
             
-            # 写入配置文件
-            os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
-            with open(self.config_path, 'w', encoding='utf-8') as fs:
-                fs.write(cfg_text)
-            
-            print(f"[Rclone] ✓ 自动生成配置: {remote_name}")
-            
-            # 测试连接
-            return self.test_remote(remote_name)
+            if result.returncode == 0:
+                print(f"[Rclone] ✓ 自动生成配置: {remote_name}")
+                return self.test_remote(remote_name)
+            else:
+                print(f"[Rclone] 自动配置失败: {result.stderr}")
+                return False
             
         except Exception as e:
             print(f"[Rclone] 自动配置失败: {e}")
