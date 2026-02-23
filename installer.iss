@@ -13,10 +13,11 @@ PrivilegesRequired=lowest
 
 [Files]
 Source: "dist\GDriveSync\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Google Drive Sync"; Filename: "{app}\GDriveSync.exe"
-Name: "{autodesktop}\Google Drive Sync"; Filename: "{app}\GDriveSync.exe"; Tasks: desktopicon
+Name: "{group}\Google Drive Sync"; Filename: "{app}\GDriveSync.exe"; IconFilename: "{app}\app_icon.ico"
+Name: "{autodesktop}\Google Drive Sync"; Filename: "{app}\GDriveSync.exe"; IconFilename: "{app}\app_icon.ico"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"; Flags: unchecked

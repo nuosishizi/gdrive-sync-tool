@@ -9,6 +9,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('config/README.txt', 'config'),
+        ('app_icon.ico', '.'),
     ],
     hiddenimports=[
         'PyQt6',

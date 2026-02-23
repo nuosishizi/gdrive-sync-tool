@@ -20,6 +20,21 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Google Drive 同步工具 (Rclone)")
     
+    # 设置全局图标（影响任务栏、标题栏、Alt+Tab显示）
+    from PyQt6.QtGui import QIcon
+    import sys as _sys
+    _icon_candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app_icon.ico'),
+    ]
+    if getattr(_sys, 'frozen', False):
+        _icon_candidates.insert(0, os.path.join(os.path.dirname(_sys.executable), 'app_icon.ico'))
+        if hasattr(_sys, '_MEIPASS'):
+            _icon_candidates.insert(0, os.path.join(_sys._MEIPASS, 'app_icon.ico'))
+    for _icon_path in _icon_candidates:
+        if os.path.exists(_icon_path):
+            app.setWindowIcon(QIcon(_icon_path))
+            break
+    
     # 初始化数据库
     db = Database("gdrive_sync.db")
     

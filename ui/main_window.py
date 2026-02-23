@@ -1158,22 +1158,25 @@ class MainWindow(QMainWindow):
             
             rclone_path = self.rclone_wrapper.rclone_path
             
-            # 获取随机可用端口以避免冲突 "bind: Only one usage of each socket address"
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.bind(('127.0.0.1', 0))
-            port = sock.getsockname()[1]
-            sock.close()
+            # 先杀掉可能残留的 rclone 进程，释放 53682 端口
+            # rclone authorize 固定使用 53682 作为 OAuth 回调端口
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", "rclone.exe"],
+                    capture_output=True, creationflags=0x08000000
+                )
+                import time; time.sleep(0.5)  # 等待端口释放
+            except Exception:
+                pass
             
             # 运行 rclone authorize（完整权限）
             self.log("请在弹出的浏览器中完成授权...", "⏳")
             self.log("提示：授权范围包括您的文件和分享文件", "ℹ")
             
-            # 使用完整 drive 权限
+            # 使用完整 drive 权限（不加 --rc，那个是配置远程控制服务的，和 OAuth 无关）
             cmd = [
-                rclone_path, "authorize", "drive", 
+                rclone_path, "authorize", "drive",
                 "--drive-scope", "drive",
-                "--rc", "--rc-addr", f"127.0.0.1:{port}"
             ]
             
             result = subprocess.run(
