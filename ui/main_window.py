@@ -108,7 +108,10 @@ class MainWindow(QMainWindow):
         
         self.init_ui()
         self.load_settings()  # 加载设置
-        self.init_rclone()  # 初始化Rclone
+        
+        # 延迟初始化Rclone，确保UI先显示出来，进度条才不会卡死
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(100, self.init_rclone)
     
     def init_rclone(self):
         """初始化Rclone包装器"""
@@ -1155,13 +1158,26 @@ class MainWindow(QMainWindow):
             
             rclone_path = self.rclone_wrapper.rclone_path
             
+            # 获取随机可用端口以避免冲突 "bind: Only one usage of each socket address"
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(('127.0.0.1', 0))
+            port = sock.getsockname()[1]
+            sock.close()
+            
             # 运行 rclone authorize（完整权限）
             self.log("请在弹出的浏览器中完成授权...", "⏳")
             self.log("提示：授权范围包括您的文件和分享文件", "ℹ")
             
             # 使用完整 drive 权限
+            cmd = [
+                rclone_path, "authorize", "drive", 
+                "--drive-scope", "drive",
+                "--rc", "--rc-addr", f"127.0.0.1:{port}"
+            ]
+            
             result = subprocess.run(
-                [rclone_path, "authorize", "drive", "--drive-scope", "drive"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5分钟超时
@@ -1179,18 +1195,27 @@ class MainWindow(QMainWindow):
                 if token_match:
                     token_json = token_match.group(1)
                     
-                    # 创建配置文件（完整权限）
-                    config_content = f"""[gdrive]
-type = drive
-scope = drive
-token = {token_json}
-team_drive = 
-"""
+                    # 为了安全，这里也应该调用 Rclone 的原生 config create 方法
+                    # 不过为了尽量少改动代码，并且在之前的 CodeQL 里已经将主流程修复
+                    # 这里既然是动态生成，也改成安全的本地生成方式
                     
                     # 写入配置
                     os.makedirs(os.path.dirname(self.rclone_wrapper.config_path), exist_ok=True)
-                    with open(self.rclone_wrapper.config_path, 'w', encoding='utf-8') as f:
-                        f.write(config_content)
+                    
+                    config_cmd = [
+                        rclone_path, "--config", self.rclone_wrapper.config_path,
+                        "config", "create", "gdrive", "drive", "scope", "drive", "token", token_json
+                    ]
+                    
+                    config_res = subprocess.run(
+                        config_cmd,
+                        capture_output=True,
+                        text=True,
+                        creationflags=0x08000000
+                    )
+                    
+                    if config_res.returncode != 0:
+                        raise Exception(f"Rclone Config 创建失败: {config_res.stderr}")
                     
                     self.log("✓ Rclone 授权成功！", "✓")
                     

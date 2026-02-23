@@ -477,6 +477,8 @@ class RcloneWrapper:
                 "--drive-chunk-size", f"{chunk_size}M",
                 "-v",  # 详细输出
                 "--use-server-modtime", # 使用服务器修改时间
+                "--local-no-unicode-normalization", # 避免一些Windows不支持的Unicode文件名
+                "--local-case-sensitive=false"      # Windows文件系统不区分大小写
             ]
             
             # 如果指定了特定文件夹（且不是根目录），则添加过滤

@@ -8,6 +8,7 @@ Compression=lzma2
 SolidCompression=yes
 OutputDir=dist
 OutputBaseFilename=GDriveSync-Windows-Setup
+SetupIconFile=app_icon.ico
 PrivilegesRequired=lowest
 
 [Files]
