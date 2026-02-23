@@ -166,10 +166,7 @@ class SettingsDialog(QDialog):
         self.skip_existing.setToolTip("不重新下载已存在的文件")
         file_layout.addRow("", self.skip_existing)
         
-        self.delete_empty_dirs = QCheckBox("删除空目录")
-        self.delete_empty_dirs.setChecked(False)
-        self.delete_empty_dirs.setToolTip("同步后删除空目录")
-        file_layout.addRow("", self.delete_empty_dirs)
+
         
         file_group.setLayout(file_layout)
         layout.addWidget(file_group)
@@ -237,8 +234,7 @@ class SettingsDialog(QDialog):
             "download": {
                 "bwlimit_enabled": False,
                 "bwlimit": 0,
-                "skip_existing": True,
-                "delete_empty_dirs": False
+                "skip_existing": True
             },
             "ui": {
                 "notify_on_complete": True,
@@ -282,7 +278,6 @@ class SettingsDialog(QDialog):
         self.bwlimit_enabled.setChecked(download.get("bwlimit_enabled", False))
         self.bwlimit_spin.setValue(download.get("bwlimit", 0))
         self.skip_existing.setChecked(download.get("skip_existing", True))
-        self.delete_empty_dirs.setChecked(download.get("delete_empty_dirs", False))
         
         # UI 设置
         ui = self.settings.get("ui", {})
@@ -306,8 +301,7 @@ class SettingsDialog(QDialog):
             "download": {
                 "bwlimit_enabled": self.bwlimit_enabled.isChecked(),
                 "bwlimit": self.bwlimit_spin.value(),
-                "skip_existing": self.skip_existing.isChecked(),
-                "delete_empty_dirs": self.delete_empty_dirs.isChecked()
+                "skip_existing": self.skip_existing.isChecked()
             },
             "ui": {
                 "notify_on_complete": self.notify_on_complete.isChecked(),
@@ -349,7 +343,6 @@ class SettingsDialog(QDialog):
             self.bwlimit_enabled.setChecked(False)
             self.bwlimit_spin.setValue(0)
             self.skip_existing.setChecked(True)
-            self.delete_empty_dirs.setChecked(False)
             
             self.notify_on_complete.setChecked(True)
             self.notify_on_error.setChecked(True)

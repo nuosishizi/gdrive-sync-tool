@@ -41,7 +41,8 @@ class RcloneSyncWorker(QThread):
                 local_path=self.local_path,
                 progress_callback=self.on_progress,
                 event_callback=self.on_event,
-                stop_flag=lambda: self.should_stop
+                stop_flag=lambda: self.should_stop,
+                log_callback=lambda msg, prefix: self.log.emit(msg, prefix)
             )
             
             self.finished.emit(success)
@@ -1449,10 +1450,29 @@ team_drive =
             )
         else:
             self.log("✗ 同步失败或已取消", "✗")
-            QMessageBox.warning(
-                self, "同步未完成",
-                "同步未能完成，请查看日志了解详情。"
-            )
+            
+            # 自动保存错误日志
+            try:
+                import datetime
+                timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+                log_filename = f"sync_error_{timestamp}.txt"
+                log_path = os.path.abspath(log_filename)
+                
+                with open(log_path, 'w', encoding='utf-8') as f:
+                    f.write(self.log_text.toPlainText())
+                
+                self.log(f"错误日志已保存: {log_path}", "ℹ")
+                
+                QMessageBox.warning(
+                    self, "同步未完成",
+                    f"同步未能完成。\n\n详细日志已保存到:\n{log_path}\n\n请查看该文件以获取错误详情。"
+                )
+            except Exception as e:
+                print(f"保存日志失败: {e}")
+                QMessageBox.warning(
+                    self, "同步未完成",
+                    "同步未能完成，请查看界面右下角的日志窗口了解详情。"
+                )
 
         # 恢复按钮状态
         self.start_button.setEnabled(True)

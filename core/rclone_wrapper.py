@@ -327,7 +327,8 @@ client_secret = {client_secret}
                    remote_name: str = "gdrive",
                    progress_callback: Optional[Callable[[RcloneStats], None]] = None,
                    event_callback: Optional[Callable[[str, str, str], None]] = None, # type, message, level
-                   stop_flag: Optional[Callable[[], bool]] = None) -> bool:
+                   stop_flag: Optional[Callable[[], bool]] = None,
+                   log_callback: Optional[Callable[[str, str], None]] = None) -> bool: # message, prefix
         """
         同步文件夹
         
@@ -338,11 +339,19 @@ client_secret = {client_secret}
             progress_callback: 进度回调
             event_callback: 事件回调 (type, message, level)
             stop_flag: 停止标志
+            log_callback: 日志回调 (message, level/prefix)
         
         Returns:
             是否成功
         """
         try:
+            # Helper for logging
+            def log(msg, prefix="ℹ"):
+                if log_callback:
+                    log_callback(msg, prefix)
+                else:
+                    print(f"[Rclone] {msg}")
+
             # 加载设置
             settings = getattr(self, 'settings', None)
             if not settings:
@@ -369,7 +378,7 @@ client_secret = {client_secret}
                 f"{remote_name}:",  # 使用根目录，通过 --drive-root-folder-id 指定文件夹
                 local_path,
                 "--config", self.config_path,
-                "--drive-root-folder-id", remote_path,  # 指定文件夹ID
+                # "--drive-root-folder-id", remote_path,  # 移动到下面判断
                 "--progress",
                 "--stats", "1s",
                 "--retries", str(retries),
@@ -381,23 +390,28 @@ client_secret = {client_secret}
                 "--use-server-modtime", # 使用服务器修改时间
             ]
             
+            # 如果指定了特定文件夹（且不是根目录），则添加过滤
+            if remote_path and remote_path != "root":
+                cmd.extend(["--drive-root-folder-id", remote_path])
+            
             # 带宽限制
             if download_settings.get('bwlimit_enabled', False):
                 bwlimit = download_settings.get('bwlimit', 0)
                 if bwlimit > 0:
                     cmd.extend(["--bwlimit", f"{bwlimit}M"])
             
-            # 删除空目录
-            if download_settings.get('delete_empty_dirs', False):
-                cmd.append("--delete-empty-src-dirs")
+            # 删除空目录 (rclone copy 不支持此参数，仅 move/sync 支持，且 copy 不应修改源文件)
+            # if download_settings.get('delete_empty_dirs', False):
+            #     cmd.append("--delete-empty-src-dirs")
             
-            print(f"[Rclone] 执行命令: {' '.join(cmd)}")
+            log(f"执行命令: {' '.join(cmd)}", "🚀")
             
             # 启动进程
             kwargs = {}
             if os.name == 'nt':
                 kwargs['creationflags'] = 0x08000000 # CREATE_NO_WINDOW
 
+            log("正在启动 Rclone 进程...", "⚙")
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -407,6 +421,7 @@ client_secret = {client_secret}
                 bufsize=1,
                 **kwargs
             )
+            log("Rclone 进程已启动", "✓")
             
             # 读取输出
             current_stats = {
@@ -427,7 +442,7 @@ client_secret = {client_secret}
             for line in self.process.stdout:
                 # 检查停止标志
                 if stop_flag and stop_flag():
-                    print("[Rclone] 收到停止信号")
+                    log("收到停止信号", "⏹")
                     self.stop()
                     return False
                 
@@ -435,8 +450,8 @@ client_secret = {client_secret}
                 if not line:
                     continue
                 
-                # 打印原始日志（用于调试）
-                # print(f"[Rclone] {line}")
+                # 打印原始日志（用于调试）- 用户要求打印所有环节
+                log(f"[RAW] {line}", "📝")
                 
                 # --- 解析事件日志 ---
                 # INFO : filename: Copied (new)
@@ -791,14 +806,17 @@ client_secret = {client_secret}
             self.process = None
             
             if return_code == 0:
-                print("[Rclone] ✓ 同步完成")
+                log("同步完成", "✓")
                 return True
             else:
-                print(f"[Rclone] ✗ 同步失败，退出代码: {return_code}")
+                log(f"同步失败，退出代码: {return_code}", "✗")
                 return False
                 
         except Exception as e:
-            print(f"[Rclone] 同步异常: {e}")
+            if 'log' in locals():
+                log(f"同步异常: {e}", "✗")
+            else:
+                print(f"[Rclone] Exception: {e}")
             import traceback
             traceback.print_exc()
             return False
