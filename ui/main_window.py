@@ -137,6 +137,11 @@ class MainWindow(QMainWindow):
         # 延迟初始化Rclone，确保UI先显示出来，进度条才不会卡死
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(100, self.init_rclone)
+        
+        # 启动自动更新检查器（静默后台，8秒后首次检查）
+        from core.auto_updater import AutoUpdater
+        self._auto_updater = AutoUpdater(self)
+        self._auto_updater.start()
     
     def init_rclone(self):
         """初始化Rclone包装器"""
@@ -1244,23 +1249,20 @@ class MainWindow(QMainWindow):
                             continue
                 
                 if token_json:
-                    # 写入配置
-                    os.makedirs(os.path.dirname(self.rclone_wrapper.config_path), exist_ok=True)
+                    # 直接写 rclone.conf（INI 格式）
+                    # 注意：不使用 rclone config create，因为它会在验证 token 时再次打开浏览器
+                    config_dir = os.path.dirname(self.rclone_wrapper.config_path)
+                    if config_dir:
+                        os.makedirs(config_dir, exist_ok=True)
                     
-                    config_cmd = [
-                        rclone_path, "--config", self.rclone_wrapper.config_path,
-                        "config", "create", "gdrive", "drive", "scope", "drive", "token", token_json
-                    ]
-                    
-                    config_res = subprocess.run(
-                        config_cmd,
-                        capture_output=True,
-                        text=True,
-                        creationflags=0x08000000
+                    config_content = (
+                        "[gdrive]\n"
+                        "type = drive\n"
+                        "scope = drive\n"
+                        f"token = {token_json}\n"
                     )
-                    
-                    if config_res.returncode != 0:
-                        raise Exception(f"Rclone Config 创建失败: {config_res.stderr}")
+                    with open(self.rclone_wrapper.config_path, 'w', encoding='utf-8') as f:
+                        f.write(config_content)
                     
                     self.log("✓ Rclone 授权成功！", "✓")
                     

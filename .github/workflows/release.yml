@@ -67,6 +67,17 @@ jobs:
       with:
         files: dist/GDriveSync-Windows-Setup.exe
         generate_release_notes: true
+        name: "GDriveSync ${{ github.ref_name }}"
+        body: |
+          ## 🚀 GDriveSync ${{ github.ref_name }} — Windows 版本
+          
+          ### 安装方法
+          1. 下载 `GDriveSync-Windows-Setup.exe`
+          2. 双击运行安装包，按提示完成安装
+          3. 首次运行后点击「授权」，在浏览器中完成 Google 账号授权
+          
+          ### 更新内容
+          （以下由 GitHub 自动生成）
         
     - name: Upload to Release (macOS)
       if: matrix.os == 'macos-latest'
@@ -74,3 +85,4 @@ jobs:
       with:
         files: dist/GDriveSync-macOS.zip
         generate_release_notes: true
+        name: "GDriveSync ${{ github.ref_name }}"
