@@ -78,3 +78,5 @@ gdrive_sync.db
 push_err.log
 config/*.json
 !config/default.json
+config/*.conf
+config/rclone.conf

@@ -5,9 +5,10 @@ import urllib.request
 import json
 from PyQt6.QtCore import QThread, pyqtSignal, QTimer
 
-
-# 当前版本号（每次发布时同步修改此处）
-APP_VERSION = "1.0.18"
+try:
+    from version import APP_VERSION
+except ImportError:
+    APP_VERSION = "1.0.20"  # fallback
 GITHUB_RELEASES_API = "https://api.github.com/repos/secure-artifacts/google_tongbu/releases/latest"
 CHECK_INTERVAL_HOURS = 6   # 每 6 小时静默检查一次
 
