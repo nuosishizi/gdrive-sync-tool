@@ -15,6 +15,31 @@ from ui.folder_browser import GDriveFolderBrowser
 from database.models import SyncTask
 
 
+def _get_item_icon(is_dir: bool, mime: str = "") -> str:
+    """Return emoji icon for a Google Drive item based on type."""
+    if is_dir:
+        return "📁"
+    if not mime:
+        return "📄"
+    if "spreadsheet" in mime or "excel" in mime:
+        return "📊"
+    if "document" in mime or "word" in mime:
+        return "📄"
+    if "presentation" in mime or "powerpoint" in mime:
+        return "📑"
+    if "pdf" in mime:
+        return "📋"
+    if "image" in mime:
+        return "🖼"
+    if "video" in mime:
+        return "🎬"
+    if "audio" in mime:
+        return "🎵"
+    if "zip" in mime or "compress" in mime:
+        return "🗜"
+    return "📄"
+
+
 class RcloneSyncWorker(QThread):
     """Rclone同步工作线程"""
     progress = pyqtSignal(object)  # RcloneStats
@@ -1191,17 +1216,34 @@ class MainWindow(QMainWindow):
                 # 提取 token
                 output = result.stdout
                 
-                # 查找 token JSON
-                import re
-                token_match = re.search(r'(\{[^}]+\})', output)
+                # 使用更健壮的 JSON 提取：匹配最剐的完整 JSON 对象（处理嵌套结构）
+                import re, json
+                # 找到以 { 开头的最剐 JSON 对象
+                token_json = None
+                for m in re.finditer(r'\{', output):
+                    candidate = output[m.start():]
+                    # 找到匹配的尾部
+                    depth = 0
+                    end = -1
+                    for ci, ch in enumerate(candidate):
+                        if ch == '{':
+                            depth += 1
+                        elif ch == '}':
+                            depth -= 1
+                            if depth == 0:
+                                end = ci
+                                break
+                    if end > 0:
+                        try:
+                            parsed = json.loads(candidate[:end+1])
+                            # 确保是 token（包含 access_token）
+                            if 'access_token' in parsed:
+                                token_json = candidate[:end+1]
+                                break
+                        except Exception:
+                            continue
                 
-                if token_match:
-                    token_json = token_match.group(1)
-                    
-                    # 为了安全，这里也应该调用 Rclone 的原生 config create 方法
-                    # 不过为了尽量少改动代码，并且在之前的 CodeQL 里已经将主流程修复
-                    # 这里既然是动态生成，也改成安全的本地生成方式
-                    
+                if token_json:
                     # 写入配置
                     os.makedirs(os.path.dirname(self.rclone_wrapper.config_path), exist_ok=True)
                     
@@ -1899,29 +1941,33 @@ class MainWindow(QMainWindow):
         self.folder_worker.load_error.connect(lambda err: self.log(f"加载失败: {err}", "✗"))
         self.folder_worker.start()
     
-    def _on_root_loaded(self, folders, root_item):
+    def _on_root_loaded(self, items, root_item):
         """根目录加载完成回调"""
         from PyQt6.QtWidgets import QTreeWidgetItem
         from PyQt6.QtCore import Qt
         
-        for folder in folders:
-            folder_name = folder.get('Name', '')
-            folder_id_sub = folder.get('ID', '')
+        for item in items:
+            item_name = item.get('Name', '')
+            item_id   = item.get('ID', '')
+            is_dir    = item.get('IsDir', False)
+            mime      = item.get('MimeType', '')
+            icon      = _get_item_icon(is_dir, mime)
             
-            # 创建子节点
             child_item = QTreeWidgetItem(root_item)
-            child_item.setText(0, f"📁 {folder_name}")
+            child_item.setText(0, f"{icon} {item_name}")
             child_item.setData(0, Qt.ItemDataRole.UserRole, {
-                'id': folder_id_sub,
-                'name': folder_name
+                'id': item_id,
+                'name': item_name,
+                'is_dir': is_dir,
             })
             
-            # 添加占位符
-            placeholder = QTreeWidgetItem(child_item)
-            placeholder.setText(0, "...")
+            if is_dir:
+                # 文件夹添加占位符
+                placeholder = QTreeWidgetItem(child_item)
+                placeholder.setText(0, "...")
         
         root_item.setExpanded(True)
-        self.log("✓ Google Drive 加载完成", "✓")
+        self.log(f"✓ Google Drive 加载完成", "✓")
     
     def load_subfolders_embedded(self, parent_item, folder_id):
         """延迟加载子文件夹（使用 QThread 异步）"""
@@ -1938,41 +1984,52 @@ class MainWindow(QMainWindow):
             self._folder_workers = []
         self._folder_workers.append(worker)
     
-    def _populate_tree_items(self, folders, parent_item):
+    def _populate_tree_items(self, items, parent_item):
         """填充树节点（在主线程执行）"""
         from PyQt6.QtWidgets import QTreeWidgetItem
         from PyQt6.QtCore import Qt
         
-        for folder in folders:
-            folder_name = folder.get('Name', '')
-            folder_id_sub = folder.get('ID', '')
+        for item in items:
+            item_name = item.get('Name', '')
+            item_id   = item.get('ID', '')
+            is_dir    = item.get('IsDir', False)
+            mime      = item.get('MimeType', '')
+            icon      = _get_item_icon(is_dir, mime)
             
-            # 创建子节点
             child_item = QTreeWidgetItem(parent_item)
-            child_item.setText(0, f"📁 {folder_name}")
+            child_item.setText(0, f"{icon} {item_name}")
             child_item.setData(0, Qt.ItemDataRole.UserRole, {
-                'id': folder_id_sub,
-                'name': folder_name
+                'id': item_id,
+                'name': item_name,
+                'is_dir': is_dir,
             })
             
-            # 添加占位符
-            placeholder = QTreeWidgetItem(child_item)
-            placeholder.setText(0, "...")
+            if is_dir:
+                placeholder = QTreeWidgetItem(child_item)
+                placeholder.setText(0, "...")
     
     def on_tree_item_expanded(self, item):
-        """展开节点时加载子文件夹（嵌入式版本）"""
+        """展开节点时加载子目录（嵌入式版本）"""
         from PyQt6.QtCore import Qt
         
-        # 检查是否已加载
         if item.childCount() == 1 and item.child(0).text(0) == "...":
-            # 删除占位符
             item.takeChild(0)
             
-            # 加载真实数据
             data = item.data(0, Qt.ItemDataRole.UserRole)
-            if data and isinstance(data, dict):
+            if data and isinstance(data, dict) and data.get('is_dir', True):
                 folder_id = data['id']
                 self.load_subfolders_embedded(item, folder_id)
+    
+    def on_tree_item_clicked(self, item, column):
+        """点击树节点"""
+        from PyQt6.QtCore import Qt
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not isinstance(data, dict):
+            return
+        if not data.get('is_dir', True):
+            # 文件不能选为同步目标
+            return
+        self.select_folder_from_tree_embedded(data['id'], data['name'])
     
     def on_tree_item_clicked(self, item, column):
         """点击树节点自动选择"""

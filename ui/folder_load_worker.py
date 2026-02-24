@@ -27,7 +27,6 @@ class FolderLoadWorker(QThread):
                 self.rclone_wrapper.rclone_path,
                 "lsjson",
                 "gdrive:",
-                "--dirs-only",
                 "--config", self.rclone_wrapper.config_path,
                 "--max-depth", "1"
             ]
@@ -46,9 +45,11 @@ class FolderLoadWorker(QThread):
             
             if result.returncode == 0:
                 import json
-                folders = json.loads(result.stdout)
-                # 发送结果到主线程
-                self.folders_loaded.emit(folders)
+                all_items = json.loads(result.stdout)
+                # 文件夹在前，文件在后，同类按名称排序
+                folders = sorted([i for i in all_items if i.get('IsDir')], key=lambda x: x.get('Name','').lower())
+                files   = sorted([i for i in all_items if not i.get('IsDir')], key=lambda x: x.get('Name','').lower())
+                self.folders_loaded.emit(folders + files)
             else:
                 self.load_error.emit(f"Rclone 错误: {result.stderr}")
                 
