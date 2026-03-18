@@ -1,6 +1,6 @@
 [Setup]
 AppName=Google Drive Sync
-AppVersion=1.0.20
+AppVersion=1.0.21
 DefaultDirName={autopf}\GDriveSync
 DefaultGroupName=GDriveSync
 UninstallDisplayIcon={app}\GDriveSync.exe
