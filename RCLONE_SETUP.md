@@ -47,7 +47,7 @@ C:\Users\<YourUsername>\AppData\Roaming\rclone\rclone.conf
 
 找到上面显示的 `rclone.conf` 文件，复制到：
 ```
-C:\path\to\gdrive-sync-tool\config\rclone.conf
+<项目目录>\config\rclone.conf
 ```
 
 或者直接在 CMD 运行：
