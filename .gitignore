@@ -76,7 +76,10 @@ rclone.exe
 gdrive_sync.7z
 gdrive_sync.db
 push_err.log
+sync_error_*.txt
 config/*.json
 !config/default.json
 config/*.conf
 config/rclone.conf
+config/*.pickle
+

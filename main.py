@@ -43,8 +43,8 @@ def main():
     sync_engine = None
     try:
         gdrive_client = GDriveClient(
-            credentials_path="config/credentials.json",
-            token_path="config/token.pickle"
+            credentials_path=os.environ.get("GDRIVE_CREDENTIALS_PATH", "config/credentials.json"),
+            token_path=os.environ.get("GDRIVE_TOKEN_PATH", "config/token.json")
         )
         sync_engine = SyncEngine(gdrive_client, db)
     except Exception as e:

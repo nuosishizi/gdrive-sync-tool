@@ -6,13 +6,18 @@ import os
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLabel, QProgressBar, QTextEdit, QGroupBox, QFileDialog,
-    QComboBox, QMessageBox, QLineEdit
+    QComboBox, QMessageBox, QLineEdit, QTabWidget, QTableWidget,
+    QTableWidgetItem, QHeaderView, QAbstractItemView, QListWidget,
+    QListWidgetItem
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QColor, QBrush
 from datetime import datetime
 from ui.folder_browser import GDriveFolderBrowser
 from database.models import SyncTask
+from ui.upload_drag_area import UploadDragArea
+from ui.upload_worker import RcloneUploadWorker
+from ui.size_worker import SizeCalculatorWorker
 
 
 def _get_item_icon(is_dir: bool, mime: str = "") -> str:
@@ -237,24 +242,24 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle("Google Drive 下载同步工具")
+        self.setWindowTitle("Google Drive 同步与上传工具")
         self.setGeometry(100, 100, 1200, 700)
         
         # 主窗口部件
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         
-        # 主布局 - 水平分割
-        from PyQt6.QtWidgets import QHBoxLayout, QSplitter
-        from PyQt6.QtCore import Qt
-        
+        # 主布局 - 包含 QSplitter
         main_layout = QHBoxLayout()
         main_widget.setLayout(main_layout)
+        
+        from PyQt6.QtWidgets import QSplitter
+        from PyQt6.QtCore import Qt
         
         splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(splitter)
         
-        # === 左侧面板 - 来源和目标 ===
+        # === 左侧面板 - 来源和目标 === (常驻显示)
         left_panel = QWidget()
         left_layout = QVBoxLayout()
         left_panel.setLayout(left_layout)
@@ -267,39 +272,53 @@ class MainWindow(QMainWindow):
         gdrive_tree_group = self.create_gdrive_tree_panel()
         left_layout.addWidget(gdrive_tree_group, 1)  # 拉伸占据剩余空间
         
-        # 3. 本地目标路径
+        # 3. 本地目标路径与任务管理
         local_group = self.create_local_path_section()
         left_layout.addWidget(local_group)
         
-        # === 右侧面板 - 控制和状态 ===
-        right_panel = QWidget()
-        right_layout = QVBoxLayout()
-        right_panel.setLayout(right_layout)
+        # === 右侧面板 - 标签页 ===
+        self.tab_widget = QTabWidget()
+        
+        # --- Tab 1. 下载同步 ---
+        download_tab = QWidget()
+        download_layout = QVBoxLayout()
+        download_tab.setLayout(download_layout)
         
         # 1. 同步控制
         control_group = self.create_control_section()
-        right_layout.addWidget(control_group)
+        download_layout.addWidget(control_group)
         
-        # 2. 扫描进度（新增）
+        # 2. 扫描进度
         scan_progress_group = self.create_scan_progress_section()
-        right_layout.addWidget(scan_progress_group)
+        download_layout.addWidget(scan_progress_group)
         
         # 3. 传输进度
         transfer_progress_group = self.create_progress_section()
-        right_layout.addWidget(transfer_progress_group)
+        download_layout.addWidget(transfer_progress_group)
         
         # 4. 日志
         log_group = self.create_log_section()
-        right_layout.addWidget(log_group, 1)  # 拉伸占据剩余空间
+        download_layout.addWidget(log_group, 1)  # 拉伸占据剩余空间
         
-        # 添加到分割器
+        self.tab_widget.addTab(download_tab, "📥 下载同步")
+        
+        # --- Tab 2. 素材上传 ---
+        # 初始化素材上传变量
+        self.upload_queue = []
+        self.upload_worker = None
+        self.size_workers = []
+        self.selected_upload_gdrive_folder_id = "root"
+        self.selected_upload_gdrive_folder_name = "我的云端硬盘"
+        
+        upload_tab = self.create_upload_tab()
+        self.tab_widget.addTab(upload_tab, "📤 素材上传")
+        
+        # 将左侧面板和右侧标签页添加到水平分割器中
         splitter.addWidget(left_panel)
-        splitter.addWidget(right_panel)
-        splitter.setSizes([500, 700])  # 左侧小一点，右侧大一点
-        
-        # 检查 Rclone 授权
-        # self.check_auth_status()  # 已禁用
-    
+        splitter.addWidget(self.tab_widget)
+        splitter.setSizes([450, 750])  # 左侧小一点，右侧大一点
+
+
     def create_auth_section(self):
         """创建授权区域"""
         group = QGroupBox("授权状态")
@@ -563,16 +582,12 @@ class MainWindow(QMainWindow):
                 if self.gdrive_client.authenticate():
                     user_info = self.gdrive_client.get_user_info()
                     email = user_info.get('emailAddress', '未知用户')
-                    
-                    
                     self.auth_status_label.setText(f"● 已连接: {email}")
                     self.auth_status_label.setStyleSheet("color: green; font-weight: bold;")
-                    
-                    # 启用相关功能
-                    self.browse_gdrive_button.setEnabled(True)
+                    if hasattr(self, 'browse_gdrive_button'):
+                        self.browse_gdrive_button.setEnabled(True)
                     self.start_button.setEnabled(True)
                     self.preview_button.setEnabled(True)
-                    
                     self.log(f"自动加载授权: {email}", "✓")
                     
                     # 自动生成Rclone配置（如果不存在）
@@ -599,6 +614,8 @@ class MainWindow(QMainWindow):
                 if folder_id:
                     self.selected_gdrive_folder_id = folder_id
                     self.selected_gdrive_folder_name = folder_name
+                    self.selected_upload_gdrive_folder_id = folder_id
+                    self.selected_upload_gdrive_folder_name = folder_name
                     
                     if folder_id == "root":
                         display = "📁 我的云端硬盘（整个网盘）"
@@ -608,6 +625,11 @@ class MainWindow(QMainWindow):
                     if hasattr(self, 'gdrive_source_label'):
                         self.gdrive_source_label.setText(display)
                         self.gdrive_source_label.setStyleSheet("color: green; font-weight: bold;")
+                        
+                    if hasattr(self, 'upload_target_label'):
+                        self.upload_target_label.setText(display)
+                        self.upload_target_label.setStyleSheet("color: green; font-weight: bold;")
+
 
                 self.local_folder_input.setText(config.get('local_folder', ''))
                 
@@ -653,8 +675,8 @@ class MainWindow(QMainWindow):
                 
                 self.log(f"✓ Google API 授权成功: {email}", "✓")
                 
-                # 启用浏览按钮
-                self.browse_gdrive_button.setEnabled(True)
+                if hasattr(self, 'browse_gdrive_button'):
+                    self.browse_gdrive_button.setEnabled(True)
                 self.preview_button.setEnabled(True)
                 
                 QMessageBox.information(
@@ -727,7 +749,9 @@ class MainWindow(QMainWindow):
                 ]
                 
                 if folder_id and folder_id != "root":
-                    cmd.extend(["--drive-root-folder-id", folder_id])
+                    from utils.path_helpers import validate_gdrive_id
+                    safe_id = validate_gdrive_id(folder_id)
+                    cmd.append(f"--drive-root-folder-id={safe_id}")
                 
                 try:
                     result = subprocess.run(
@@ -909,7 +933,9 @@ class MainWindow(QMainWindow):
                 
                 # 如果有文件夹ID，添加参数
                 if folder_id:
-                    cmd.extend(["--drive-root-folder-id", folder_id])
+                    from utils.path_helpers import validate_gdrive_id
+                    safe_id = validate_gdrive_id(folder_id)
+                    cmd.append(f"--drive-root-folder-id={safe_id}")
                 
                 result = subprocess.run(
                     cmd,
@@ -1199,6 +1225,22 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             
+            # 优先从环境变量读取 Client ID 和 Client Secret，其次从 credentials.json 读取
+            client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+            client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+            credentials_path = os.environ.get("GDRIVE_CREDENTIALS_PATH", "config/credentials.json")
+            if (not client_id or not client_secret) and os.path.exists(credentials_path):
+                try:
+                    import json
+                    with open(credentials_path, "r", encoding="utf-8") as f:
+                        creds_data = json.load(f)
+                        installed = creds_data.get("installed", {}) or creds_data.get("web", {})
+                        if installed:
+                            client_id = installed.get("client_id", "")
+                            client_secret = installed.get("client_secret", "")
+                except Exception as e:
+                    self.log(f"读取 credentials.json 失败: {e}", "⚠")
+
             # 运行 rclone authorize（完整权限）
             self.log("请在弹出的浏览器中完成授权...", "⏳")
             self.log("提示：授权范围包括您的文件和分享文件", "ℹ")
@@ -1206,8 +1248,12 @@ class MainWindow(QMainWindow):
             # 使用完整 drive 权限（不加 --rc，那个是配置远程控制服务的，和 OAuth 无关）
             cmd = [
                 rclone_path, "authorize", "drive",
-                "--drive-scope", "drive",
             ]
+            if client_id and client_secret:
+                cmd.extend([client_id, client_secret])
+                self.log("检测到专属 Google API OAuth 凭据，正在使用专属凭据进行授权...", "🔑")
+            
+            cmd.extend(["--drive-scope", "drive"])
             
             result = subprocess.run(
                 cmd,
@@ -1249,20 +1295,10 @@ class MainWindow(QMainWindow):
                             continue
                 
                 if token_json:
-                    # 直接写 rclone.conf（INI 格式）
-                    # 注意：不使用 rclone config create，因为它会在验证 token 时再次打开浏览器
-                    config_dir = os.path.dirname(self.rclone_wrapper.config_path)
-                    if config_dir:
-                        os.makedirs(config_dir, exist_ok=True)
-                    
-                    config_content = (
-                        "[gdrive]\n"
-                        "type = drive\n"
-                        "scope = drive\n"
-                        f"token = {token_json}\n"
+                    # 直接写 rclone.conf（INI 格式）并限制文件访问权限
+                    self.rclone_wrapper._write_remote_config(
+                        "gdrive", client_id, client_secret, token_json
                     )
-                    with open(self.rclone_wrapper.config_path, 'w', encoding='utf-8') as f:
-                        f.write(config_content)
                     
                     self.log("✓ Rclone 授权成功！", "✓")
                     
@@ -1676,8 +1712,9 @@ class MainWindow(QMainWindow):
                 # 获取日志内容
                 log_content = self.log_text.toPlainText()
                 
-                # 导出为CSV
+                # 导出为CSV（防止公式注入）
                 import csv
+                from utils.path_helpers import sanitize_csv_field
                 with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
                     writer = csv.writer(f)
                     writer.writerow(['时间', '级别', '消息'])
@@ -1687,12 +1724,12 @@ class MainWindow(QMainWindow):
                             # 简单解析
                             parts = line.split('] ', 1)
                             if len(parts) == 2:
-                                time_part = parts[0].replace('[', '')
+                                time_part = sanitize_csv_field(parts[0].replace('[', ''))
                                 msg_parts = parts[1].split(' ', 1)
                                 if len(msg_parts) == 2:
-                                    writer.writerow([time_part, msg_parts[0], msg_parts[1]])
+                                    writer.writerow([time_part, sanitize_csv_field(msg_parts[0]), sanitize_csv_field(msg_parts[1])])
                                 else:
-                                    writer.writerow([time_part, '', parts[1]])
+                                    writer.writerow([time_part, '', sanitize_csv_field(parts[1])])
                 
                 self.log(f"✓ 日志已导出: {filename}", "✓")
                 QMessageBox.information(self, "成功", f"日志已导出到:\n{filename}")
@@ -1843,12 +1880,7 @@ class MainWindow(QMainWindow):
 
     def export_log(self):
         """导出日志"""
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, "导出日志", "sync_log.csv", "CSV Files (*.csv)"
-        )
-        if file_path:
-            # TODO: 导出日志到CSV
-            self.log(f"日志已导出: {file_path}", "✓")
+        self.export_logs()
     
     def closeEvent(self, event):
         """窗口关闭事件"""
@@ -2048,6 +2080,8 @@ class MainWindow(QMainWindow):
         # 存储选择的文件夹ID
         self.selected_gdrive_folder_id = folder_id
         self.selected_gdrive_folder_name = folder_name
+        self.selected_upload_gdrive_folder_id = folder_id
+        self.selected_upload_gdrive_folder_name = folder_name
         
         # 更新来源路径显示
         if folder_id == "root":
@@ -2058,7 +2092,12 @@ class MainWindow(QMainWindow):
         self.gdrive_source_label.setText(display_path)
         self.gdrive_source_label.setStyleSheet("color: green; font-weight: bold;")
         
+        if hasattr(self, 'upload_target_label'):
+            self.upload_target_label.setText(display_path)
+            self.upload_target_label.setStyleSheet("color: green; font-weight: bold;")
+        
         self.log(f"✓ 已选择来源: {folder_name}", "✓")
+
     
     # ========== 新增方法 ==========
     
@@ -2240,6 +2279,8 @@ class MainWindow(QMainWindow):
             # 恢复 Google Drive 选择
             self.selected_gdrive_folder_id = task_data.get('gdrive_folder', '')
             self.selected_gdrive_folder_name = task_data.get('gdrive_folder_name', '')
+            self.selected_upload_gdrive_folder_id = self.selected_gdrive_folder_id
+            self.selected_upload_gdrive_folder_name = self.selected_gdrive_folder_name
             
             # 更新显示
             if self.selected_gdrive_folder_id == "root":
@@ -2250,6 +2291,11 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'gdrive_source_label'):
                 self.gdrive_source_label.setText(display)
                 self.gdrive_source_label.setStyleSheet("color: green; font-weight: bold;")
+                
+            if hasattr(self, 'upload_target_label'):
+                self.upload_target_label.setText(display)
+                self.upload_target_label.setStyleSheet("color: green; font-weight: bold;")
+
             
             # 恢复本地路径
             local_path = task_data.get('local_folder', '')
@@ -2295,5 +2341,507 @@ class MainWindow(QMainWindow):
                     
             except Exception as e:
                 self.log(f"删除任务失败: {e}", "✗")
+
+    # ==================================================================
+    # 素材上传功能实现
+    # ==================================================================
+
+    def create_upload_tab(self):
+        """创建素材上传标签页"""
+        upload_tab = QWidget()
+        layout = QHBoxLayout()
+        upload_tab.setLayout(layout)
+        
+        from PyQt6.QtWidgets import QSplitter
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        layout.addWidget(splitter)
+        
+        # === 左侧控制面板 ===
+        left_panel = QWidget()
+        left_layout = QVBoxLayout()
+        left_panel.setLayout(left_layout)
+        
+        # 1. 目标云盘文件夹
+        target_group = QGroupBox("目标云端文件夹")
+        target_layout = QHBoxLayout()
+        
+        # 根据当前选择初始化显示
+        folder_id = getattr(self, 'selected_gdrive_folder_id', '')
+        folder_name = getattr(self, 'selected_gdrive_folder_name', '')
+        if folder_id:
+            if folder_id == "root":
+                display = "📁 我的云端硬盘（整个网盘）"
+            else:
+                display = f"📁 {folder_name}"
+            self.upload_target_label = QLabel(display)
+            self.upload_target_label.setStyleSheet("color: green; font-weight: bold;")
+        else:
+            self.upload_target_label = QLabel("📁 请先在左侧选择目标文件夹")
+            self.upload_target_label.setStyleSheet("color: #FF9800; font-weight: bold;")
+            
+        target_layout.addWidget(QLabel("当前上传目标 (同左侧选择):"))
+        target_layout.addWidget(self.upload_target_label, 1)
+        target_group.setLayout(target_layout)
+        left_layout.addWidget(target_group)
+
+        
+        # 2. 拖拽上传区
+        self.drag_area = UploadDragArea()
+        self.drag_area.files_dropped.connect(self.on_files_dropped_to_upload)
+        self.drag_area.clicked.connect(self.select_files_manually)
+        left_layout.addWidget(self.drag_area)
+        
+        # 3. 拖拽提示和操作按钮
+        add_buttons_layout = QHBoxLayout()
+        self.add_files_btn = QPushButton("➕ 添加本地文件")
+        self.add_files_btn.clicked.connect(self.select_files_manually)
+        self.add_folder_btn = QPushButton("➕ 添加本地文件夹")
+        self.add_folder_btn.clicked.connect(self.select_folder_manually)
+        add_buttons_layout.addWidget(self.add_files_btn)
+        add_buttons_layout.addWidget(self.add_folder_btn)
+        left_layout.addLayout(add_buttons_layout)
+        
+        # === 右侧进度与队列表面板 ===
+        right_panel = QWidget()
+        right_layout = QVBoxLayout()
+        right_panel.setLayout(right_layout)
+        
+        # 1. 控制按钮组
+        control_group = QGroupBox("上传控制")
+        control_layout = QHBoxLayout()
+        
+        self.start_upload_btn = QPushButton("▶ 开始上传")
+        self.start_upload_btn.clicked.connect(self.start_upload)
+        self.start_upload_btn.setEnabled(False) # 队列为空时禁用
+        
+        self.stop_upload_btn = QPushButton("⏹ 停止")
+        self.stop_upload_btn.clicked.connect(self.stop_upload)
+        self.stop_upload_btn.setEnabled(False)
+        
+        self.delete_item_btn = QPushButton("➖ 删除选中")
+        self.delete_item_btn.clicked.connect(self.delete_selected_upload_items)
+        
+        self.clear_queue_btn = QPushButton("🗑 清空列表")
+        self.clear_queue_btn.clicked.connect(self.clear_upload_queue)
+        
+        control_layout.addWidget(self.start_upload_btn)
+        control_layout.addWidget(self.stop_upload_btn)
+        control_layout.addWidget(self.delete_item_btn)
+        control_layout.addWidget(self.clear_queue_btn)
+        control_layout.addStretch()
+        control_group.setLayout(control_layout)
+        right_layout.addWidget(control_group)
+        
+        # 2. 总体进度与统计
+        stats_group = QGroupBox("📈 总体进度")
+        stats_layout = QVBoxLayout()
+        
+        progress_info_layout = QHBoxLayout()
+        self.upload_status_lbl = QLabel("等待上传中...")
+        self.upload_speed_lbl = QLabel("🚀 0.0 MB/s")
+        self.upload_speed_lbl.setStyleSheet("font-weight: bold; color: #2196F3;")
+        progress_info_layout.addWidget(self.upload_status_lbl)
+        progress_info_layout.addStretch()
+        progress_info_layout.addWidget(self.upload_speed_lbl)
+        stats_layout.addLayout(progress_info_layout)
+        
+        self.upload_overall_progress = QProgressBar()
+        self.upload_overall_progress.setFixedHeight(15)
+        self.upload_overall_progress.setFormat("%p%")
+        stats_layout.addWidget(self.upload_overall_progress)
+        
+        # 队列统计标签
+        stats_labels_layout = QHBoxLayout()
+        self.upload_stats_count_lbl = QLabel("📂 待上传: 0 项")
+        self.upload_stats_size_lbl = QLabel("💾 总大小: 0 B")
+        self.upload_stats_success_lbl = QLabel("✅ 成功: 0")
+        self.upload_stats_failed_lbl = QLabel("❌ 失败: 0")
+        self.upload_stats_failed_lbl.setStyleSheet("color: red;")
+        stats_labels_layout.addWidget(self.upload_stats_count_lbl)
+        stats_labels_layout.addWidget(self.upload_stats_size_lbl)
+        stats_labels_layout.addWidget(self.upload_stats_success_lbl)
+        stats_labels_layout.addWidget(self.upload_stats_failed_lbl)
+        stats_labels_layout.addStretch()
+        stats_layout.addLayout(stats_labels_layout)
+        
+        stats_group.setLayout(stats_layout)
+        right_layout.addWidget(stats_group)
+        
+        # 3. 待上传队列列表表格
+        right_layout.addWidget(QLabel("上传任务队列:"))
+        self.upload_table = QTableWidget()
+        self.upload_table.setColumnCount(6)
+        self.upload_table.setHorizontalHeaderLabels(["名称", "本地路径", "大小", "类型", "状态", "进度"])
+        self.upload_table.verticalHeader().setVisible(False)
+        self.upload_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.upload_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.upload_table.setAlternatingRowColors(True)
+        
+        # 列宽自适应
+        self.upload_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.upload_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        self.upload_table.setColumnWidth(1, 250)
+        self.upload_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.upload_table.setColumnWidth(2, 90)
+        self.upload_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.upload_table.setColumnWidth(3, 70)
+        self.upload_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.upload_table.setColumnWidth(4, 90)
+        self.upload_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self.upload_table.setColumnWidth(5, 100)
+        
+        right_layout.addWidget(self.upload_table)
+        
+        # 4. 上传专属日志框
+        right_layout.addWidget(QLabel("上传日志:"))
+        self.upload_log_list = QListWidget()
+        self.upload_log_list.setUniformItemSizes(True)
+        self.upload_log_list.setFixedHeight(120)
+        self.upload_log_list.setStyleSheet("""
+            QListWidget {
+                font-family: 'Consolas', monospace;
+                font-size: 9pt;
+                background-color: #fafafa;
+                border: 1px solid #ddd;
+            }
+        """)
+        right_layout.addWidget(self.upload_log_list)
+        
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_panel)
+        splitter.setSizes([400, 800])
+        
+        return upload_tab
+
+
+
+    def on_files_dropped_to_upload(self, paths):
+        """文件被拖入上传区时的回调"""
+        self.add_paths_to_upload_queue(paths)
+
+    def select_files_manually(self):
+        """手动选择本地文件"""
+        files, _ = QFileDialog.getOpenFileNames(self, "选择要上传的本地文件")
+        if files:
+            self.add_paths_to_upload_queue(files)
+
+    def select_folder_manually(self):
+        """手动选择本地文件夹"""
+        folder = QFileDialog.getExistingDirectory(self, "选择要上传的本地文件夹")
+        if folder:
+            self.add_paths_to_upload_queue([folder])
+
+    def add_paths_to_upload_queue(self, paths):
+        """添加路径到上传队列"""
+        if not paths:
+            return
+            
+        to_calculate = []
+        
+        for path in paths:
+            # 避免重复
+            if any(item['path'] == path for item in self.upload_queue):
+                continue
+                
+            is_dir = os.path.isdir(path)
+            name = os.path.basename(path)
+            
+            item = {
+                'path': path,
+                'is_dir': is_dir,
+                'name': name,
+                'size': -1 if is_dir else os.path.getsize(path),
+                'status': '等待上传'
+            }
+            
+            self.upload_queue.append(item)
+            idx = len(self.upload_queue) - 1
+            
+            # 插入表格行
+            row = self.upload_table.rowCount()
+            self.upload_table.insertRow(row)
+            
+            self.upload_table.setItem(row, 0, QTableWidgetItem(f"📁 {name}" if is_dir else f"📄 {name}"))
+            self.upload_table.setItem(row, 1, QTableWidgetItem(path))
+            
+            size_str = "计算中..." if is_dir else self.format_file_size(item['size'])
+            self.upload_table.setItem(row, 2, QTableWidgetItem(size_str))
+            
+            self.upload_table.setItem(row, 3, QTableWidgetItem("文件夹" if is_dir else "文件"))
+            self.upload_table.setItem(row, 4, QTableWidgetItem("等待上传"))
+            self.upload_table.setItem(row, 5, QTableWidgetItem("0%"))
+            
+            if is_dir:
+                to_calculate.append((idx, path, True))
+                
+            self.upload_log(f"添加上传项: {name}", "➕")
+            
+        # 后台计算文件夹大小
+        if to_calculate:
+            self.start_size_calculation(to_calculate)
+            
+        self.update_upload_stats()
+        self.start_upload_btn.setEnabled(len(self.upload_queue) > 0)
+
+    def start_size_calculation(self, items):
+        """后台非阻塞计算大小"""
+        worker = SizeCalculatorWorker(items)
+        worker.size_calculated.connect(self.on_size_calculated)
+        self.size_workers.append(worker)
+        worker.finished.connect(lambda: self.size_workers.remove(worker) if worker in self.size_workers else None)
+        worker.start()
+
+    def on_size_calculated(self, idx, size_bytes):
+        """大小计算完成的回调"""
+        if idx >= len(self.upload_queue):
+            return
+            
+        self.upload_queue[idx]['size'] = size_bytes
+        path = self.upload_queue[idx]['path']
+        
+        # 更新表格
+        for row in range(self.upload_table.rowCount()):
+            if self.upload_table.item(row, 1).text() == path:
+                self.upload_table.item(row, 2).setText(self.format_file_size(size_bytes))
+                break
+                
+        self.update_upload_stats()
+
+    def format_file_size(self, size_bytes):
+        """格式化文件大小"""
+        if size_bytes < 0:
+            return "计算中..."
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+    def update_upload_stats(self):
+        """更新上传状态栏统计"""
+        count = len(self.upload_queue)
+        self.upload_stats_count_lbl.setText(f"📂 待上传: {count} 项")
+        
+        total_size = sum(item['size'] for item in self.upload_queue if item['size'] > 0)
+        self.upload_stats_size_lbl.setText(f"💾 总大小: {self.format_file_size(total_size)}")
+        
+        success_count = sum(1 for item in self.upload_queue if item['status'] == '已完成')
+        failed_count = sum(1 for item in self.upload_queue if item['status'] == '失败')
+        self.upload_stats_success_lbl.setText(f"✅ 成功: {success_count}")
+        self.upload_stats_failed_lbl.setText(f"❌ 失败: {failed_count}")
+
+    def delete_selected_upload_items(self):
+        """从上传列表中删除选中的项目"""
+        selected_ranges = self.upload_table.selectedRanges()
+        if not selected_ranges:
+            QMessageBox.warning(self, "提示", "请先在列表中选中要删除的行")
+            return
+            
+        # 收集要删除的行索引并降序排列，避免删除引起的索引错乱
+        rows_to_delete = []
+        for r in selected_ranges:
+            for row in range(r.topRow(), r.bottomRow() + 1):
+                rows_to_delete.append(row)
+        rows_to_delete = sorted(list(set(rows_to_delete)), reverse=True)
+        
+        for row in rows_to_delete:
+            path = self.upload_table.item(row, 1).text()
+            # 从内存队列中移除
+            self.upload_queue = [item for item in self.upload_queue if item['path'] != path]
+            # 从表格界面移除
+            self.upload_table.removeRow(row)
+            
+        self.update_upload_stats()
+        self.start_upload_btn.setEnabled(len(self.upload_queue) > 0)
+        self.upload_log("已删除选中的待上传项", "ℹ")
+
+    def clear_upload_queue(self):
+        """清空上传列表"""
+        if self.upload_worker and self.upload_worker.isRunning():
+            QMessageBox.warning(self, "警告", "正在上传中，请先停止上传再清空列表")
+            return
+            
+        self.upload_queue = []
+        self.upload_table.setRowCount(0)
+        self.update_upload_stats()
+        self.start_upload_btn.setEnabled(False)
+        self.upload_log("上传队列已清空", "🗑")
+
+    def start_upload(self):
+        """开始上传队列"""
+        if not self.selected_gdrive_folder_id:
+            QMessageBox.warning(self, "警告", "请先在左侧选择 Google Drive 目标文件夹（双击或展开，点击选中）")
+            return
+            
+        if not self.upload_queue:
+            QMessageBox.warning(self, "警告", "上传队列为空，请先拖入或添加本地文件")
+            return
+            
+        if self.upload_worker and self.upload_worker.isRunning():
+            return
+            
+        if not self.rclone_wrapper:
+            QMessageBox.critical(self, "错误", "Rclone 未初始化，请检查 rclone.exe 是否存在")
+            return
+            
+        # 过滤出未上传完成的项
+        pending_items = [item for item in self.upload_queue if item['status'] not in ('已完成', '上传中')]
+        if not pending_items:
+            QMessageBox.information(self, "提示", "队列中的所有项目均已上传完成。若需重新上传，请清空后重新添加。")
+            return
+            
+        # 锁定UI
+        self.start_upload_btn.setEnabled(False)
+        self.stop_upload_btn.setEnabled(True)
+        self.delete_item_btn.setEnabled(False)
+        self.clear_queue_btn.setEnabled(False)
+        self.drag_area.setEnabled(False)
+        
+        # 启动上传线程
+        self.upload_worker = RcloneUploadWorker(
+            rclone_wrapper=self.rclone_wrapper,
+            upload_items=pending_items,
+            remote_folder_id=self.selected_gdrive_folder_id
+        )
+
+        
+        self.upload_worker.item_started.connect(self.on_upload_item_started)
+        self.upload_worker.item_progress.connect(self.on_upload_item_progress)
+        self.upload_worker.item_finished.connect(self.on_upload_item_finished)
+        self.upload_worker.overall_progress.connect(self.on_upload_overall_progress)
+        self.upload_worker.queue_finished.connect(self.on_upload_queue_finished)
+        self.upload_worker.log.connect(lambda msg, pref: self.upload_log(msg, pref))
+        
+        self.upload_worker.start()
+        self.upload_status_lbl.setText("正在上传文件...")
+        self.upload_log("上传任务队列已启动", "▶")
+
+    def stop_upload(self):
+        """停止上传"""
+        if self.upload_worker and self.upload_worker.isRunning():
+            self.upload_status_lbl.setText("正在停止...")
+            self.upload_log("正在停止上传任务...", "⏹")
+            self.upload_worker.stop()
+
+    def on_upload_item_started(self, idx):
+        """某项开始上传时的回调"""
+        path = self.upload_worker.upload_items[idx]['path']
+        for row in range(self.upload_table.rowCount()):
+            if self.upload_table.item(row, 1).text() == path:
+                # 状态修改为 上传中
+                self.upload_table.item(row, 4).setText("上传中")
+                self.upload_table.item(row, 4).setForeground(QBrush(QColor("#1976D2")))
+                
+                # 放入内置进度条
+                progress_bar = QProgressBar()
+                progress_bar.setRange(0, 100)
+                progress_bar.setValue(0)
+                progress_bar.setTextVisible(True)
+                progress_bar.setStyleSheet("""
+                    QProgressBar {
+                        border: 1px solid #ccc;
+                        border-radius: 4px;
+                        text-align: center;
+                        font-size: 8pt;
+                    }
+                    QProgressBar::chunk {
+                        background-color: #2196F3;
+                    }
+                """)
+                self.upload_table.setCellWidget(row, 5, progress_bar)
+                break
+                
+        # 同步内存状态
+        for item in self.upload_queue:
+            if item['path'] == path:
+                item['status'] = '上传中'
+                break
+        self.update_upload_stats()
+
+    def on_upload_item_progress(self, idx, stats):
+        """某项上传进度更新的回调"""
+        path = self.upload_worker.upload_items[idx]['path']
+        for row in range(self.upload_table.rowCount()):
+            if self.upload_table.item(row, 1).text() == path:
+                widget = self.upload_table.cellWidget(row, 5)
+                if isinstance(widget, QProgressBar) and stats.total_bytes > 0:
+                    pct = int((stats.bytes_transferred / stats.total_bytes) * 100)
+                    widget.setValue(pct)
+                break
+
+    def on_upload_item_finished(self, idx, success, message):
+        """某项上传结束的回调"""
+        path = self.upload_worker.upload_items[idx]['path']
+        for row in range(self.upload_table.rowCount()):
+            if self.upload_table.item(row, 1).text() == path:
+                # 移除进度条部件，换成文本
+                self.upload_table.removeCellWidget(row, 5)
+                self.upload_table.setItem(row, 5, QTableWidgetItem("100%" if success else "0%"))
+                
+                # 状态与颜色
+                status_item = self.upload_table.item(row, 4)
+                if success:
+                    status_item.setText("已完成")
+                    status_item.setForeground(QBrush(QColor("#2E7D32")))
+                else:
+                    status_item.setText("失败")
+                    status_item.setForeground(QBrush(QColor("#C62828")))
+                break
+                
+        # 同步内存状态
+        for item in self.upload_queue:
+            if item['path'] == path:
+                item['status'] = '已完成' if success else '失败'
+                break
+        self.update_upload_stats()
+
+    def on_upload_overall_progress(self, pct, speed, eta):
+        """总体上传进度回调"""
+        self.upload_overall_progress.setValue(int(pct))
+        
+        speed_mb = speed / (1024 * 1024)
+        eta_str = f"{int(eta)}s" if eta < 3600 else f"{int(eta/3600)}h {int((eta%3600)/60)}m"
+        if eta == 0:
+            eta_str = "-"
+            
+        self.upload_speed_lbl.setText(f"🚀 {speed_mb:.1f} MB/s  ⏱ 剩余: {eta_str}")
+
+    def on_upload_queue_finished(self, all_success):
+        """队列全部上传结束的回调"""
+        self.upload_status_lbl.setText("上传完成" if all_success else "上传已停止/有失败")
+        self.upload_speed_lbl.setText("🚀 0.0 MB/s")
+        
+        # 恢复UI
+        self.start_upload_btn.setEnabled(len(self.upload_queue) > 0)
+        self.stop_upload_btn.setEnabled(False)
+        self.delete_item_btn.setEnabled(True)
+        self.clear_queue_btn.setEnabled(True)
+        self.drag_area.setEnabled(True)
+
+        
+        if all_success:
+            QMessageBox.information(self, "上传成功", "队列中所有的本地素材均已成功上传到 Google Drive！")
+        else:
+            QMessageBox.warning(self, "上传未完全成功", "上传任务已结束。请检查日志或队列状态，确保所有文件上传成功。")
+
+    def upload_log(self, message, prefix="ℹ"):
+        """写日志到上传专用日志框"""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        item_text = f"[{timestamp}] {prefix} {message}"
+        from PyQt6.QtWidgets import QListWidgetItem
+        item = QListWidgetItem(item_text)
+        from PyQt6.QtCore import Qt
+        if prefix == "✓":
+            item.setForeground(Qt.GlobalColor.darkGreen)
+        elif prefix == "✗":
+            item.setForeground(Qt.GlobalColor.darkRed)
+        self.upload_log_list.addItem(item)
+        if self.upload_log_list.count() > 500:
+            self.upload_log_list.takeItem(0)
+        self.upload_log_list.scrollToBottom()
 
 

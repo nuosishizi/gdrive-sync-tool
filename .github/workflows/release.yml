@@ -19,10 +19,10 @@ jobs:
       
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       
     - name: Setup Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
       with:
         python-version: '3.10'
         cache: 'pip'
@@ -51,19 +51,19 @@ jobs:
         
     - name: Attest Build Provenance (Windows)
       if: matrix.os == 'windows-latest'
-      uses: actions/attest-build-provenance@v2
+      uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
       with:
         subject-path: 'dist/GDriveSync-Windows-Setup.exe'
         
     - name: Attest Build Provenance (macOS)
       if: matrix.os == 'macos-latest'
-      uses: actions/attest-build-provenance@v2
+      uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
       with:
         subject-path: 'dist/GDriveSync-macOS.zip'
         
     - name: Upload to Release (Windows)
       if: matrix.os == 'windows-latest'
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
       with:
         files: dist/GDriveSync-Windows-Setup.exe
         generate_release_notes: true
@@ -81,7 +81,7 @@ jobs:
         
     - name: Upload to Release (macOS)
       if: matrix.os == 'macos-latest'
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
       with:
         files: dist/GDriveSync-macOS.zip
         generate_release_notes: true

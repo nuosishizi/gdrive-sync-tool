@@ -150,7 +150,7 @@ class GDriveFolderBrowser(QDialog):
         root_item.setText(0, "📁 我的云端硬盘")
         root_item.setText(1, "")
         root_item.setText(2, "根目录")
-        root_item.setData(0, Qt.ItemDataRole.UserRole, {"id": "root", "is_folder": True})
+        root_item.setData(0, Qt.ItemDataRole.UserRole, {"id": "root", "name": "我的云端硬盘", "is_folder": True})
         
         placeholder = QTreeWidgetItem(root_item)
         placeholder.setText(0, "加载中...")
@@ -218,7 +218,7 @@ class GDriveFolderBrowser(QDialog):
             self.selected_folder_id = None
             return
         folder_id = data["id"]
-        folder_name = data["name"]
+        folder_name = data.get("name", "我的云端硬盘")
         self.selected_folder_id = folder_id
         self.selected_folder_name = folder_name
         self.selected_label.setText(f"✓ 已选择: {folder_name} (ID: {folder_id})")

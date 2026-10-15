@@ -6,6 +6,7 @@ Preview Worker - 异步预览文件列表
 from PyQt6.QtCore import QThread, pyqtSignal
 import subprocess
 import json
+from utils.path_helpers import validate_gdrive_id
 
 
 class PreviewWorker(QThread):
@@ -39,7 +40,8 @@ class PreviewWorker(QThread):
             ]
             
             if self.folder_id and self.folder_id != "root":
-                cmd.extend(["--drive-root-folder-id", self.folder_id])
+                safe_id = validate_gdrive_id(self.folder_id)
+                cmd.append(f"--drive-root-folder-id={safe_id}")
             
             # 执行命令
             result = subprocess.run(

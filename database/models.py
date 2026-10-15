@@ -141,8 +141,19 @@ class SyncTask:
             tasks.append(task)
         return tasks
     
+    ALLOWED_COLUMNS = {
+        'name', 'gdrive_folder_id', 'local_folder', 'filters',
+        'bandwidth_limit', 'schedule', 'thread_count', 'retry_count'
+    }
+
     def update(self, task_id: int, **kwargs):
         """更新任务配置"""
+        if not kwargs:
+            return
+        invalid_cols = set(kwargs.keys()) - self.ALLOWED_COLUMNS
+        if invalid_cols:
+            raise ValueError(f"不允许更新未知列: {invalid_cols}")
+
         if 'filters' in kwargs and kwargs['filters']:
             kwargs['filters'] = json.dumps(kwargs['filters'])
         
@@ -321,6 +332,7 @@ class ErrorLog:
     def export_to_csv(self, task_id: int, output_path: str):
         """导出错误日志为CSV"""
         import csv
+        from utils.path_helpers import sanitize_csv_field
         
         logs = self.get_by_task(task_id)
         
@@ -328,4 +340,8 @@ class ErrorLog:
             if logs:
                 writer = csv.DictWriter(f, fieldnames=logs[0].keys())
                 writer.writeheader()
-                writer.writerows(logs)
+                sanitized_logs = [
+                    {k: sanitize_csv_field(v) for k, v in row.items()}
+                    for row in logs
+                ]
+                writer.writerows(sanitized_logs)

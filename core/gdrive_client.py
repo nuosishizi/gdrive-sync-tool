@@ -3,7 +3,7 @@ Google Drive API 客户端
 处理 OAuth2 认证和文件操作
 """
 import os
-import pickle
+import json
 from typing import List, Dict, Optional, Callable
 from google.auth.transport.requests import Request, AuthorizedSession
 from google.oauth2.credentials import Credentials
@@ -12,7 +12,12 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import io
 import requests
-from utils.path_helpers import get_safe_path
+from utils.path_helpers import (
+    get_safe_path,
+    sanitize_filename,
+    validate_gdrive_id,
+    set_secure_file_permissions,
+)
 
 
 # Google Drive API 权限范围
@@ -44,7 +49,7 @@ class GDriveClient:
     """Google Drive API 客户端"""
     
     def __init__(self, credentials_path: str = 'config/credentials.json', 
-                 token_path: str = 'config/token.pickle'):
+                 token_path: str = 'config/token.json'):
         self.credentials_path = credentials_path
         self.token_path = token_path
         self.service = None
@@ -55,10 +60,13 @@ class GDriveClient:
         OAuth2 认证
         返回: 认证是否成功
         """
-        # 检查是否已有令牌
+        # 检查是否已有 JSON 格式令牌（不使用 pickle.load 以防反序列化代码执行）
         if os.path.exists(self.token_path):
-            with open(self.token_path, 'rb') as token:
-                self.creds = pickle.load(token)
+            try:
+                self.creds = Credentials.from_authorized_user_file(self.token_path, SCOPES)
+            except Exception as e:
+                print(f"[GDrive] 读取令牌文件失败，将重新认证: {e}")
+                self.creds = None
         
         # 如果令牌无效或不存在，重新认证
         if not self.creds or not self.creds.valid:
@@ -66,23 +74,39 @@ class GDriveClient:
                 # 刷新过期的令牌
                 self.creds.refresh(Request())
             else:
-                # 检查 credentials.json 是否存在
-                if not os.path.exists(self.credentials_path):
+                env_client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+                env_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+
+                if env_client_id and env_client_secret:
+                    client_config = {
+                        "installed": {
+                            "client_id": env_client_id,
+                            "client_secret": env_client_secret,
+                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                            "redirect_uris": ["http://localhost"]
+                        }
+                    }
+                    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+                elif os.path.exists(self.credentials_path):
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        self.credentials_path, SCOPES
+                    )
+                else:
                     raise FileNotFoundError(
-                        f"未找到 {self.credentials_path}\n"
-                        "请从 Google Cloud Console 下载 OAuth 2.0 客户端密钥"
+                        f"未找到 {self.credentials_path} 且未设置环境变量 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET\n"
+                        "请从 Google Cloud Console 下载 OAuth 2.0 客户端密钥或配置环境变量"
                     )
                 
-                # 执行 OAuth 流程
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    self.credentials_path, SCOPES
-                )
                 self.creds = flow.run_local_server(port=0)
             
-            # 保存令牌供下次使用
-            os.makedirs(os.path.dirname(self.token_path), exist_ok=True)
-            with open(self.token_path, 'wb') as token:
-                pickle.dump(self.creds, token)
+            # 保存 JSON 令牌供下次使用，并限制文件权限为仅当前用户可读
+            token_dir = os.path.dirname(self.token_path)
+            if token_dir:
+                os.makedirs(token_dir, exist_ok=True)
+            with open(self.token_path, 'w', encoding='utf-8') as token_file:
+                token_file.write(self.creds.to_json())
+            set_secure_file_permissions(self.token_path)
         
         # 构建服务 - 使用 credentials 参数会自动处理 HTTP 层
         # 这比手动配置 httplib2 更稳定
@@ -110,7 +134,8 @@ class GDriveClient:
         if not self.service:
             raise Exception("未认证，请先调用 authenticate()")
         
-        query = f"'{folder_id}' in parents and trashed=false"
+        safe_folder_id = validate_gdrive_id(folder_id or 'root')
+        query = f"'{safe_folder_id}' in parents and trashed=false"
         fields = "files(id, name, mimeType, size, modifiedTime, md5Checksum, parents)"
         
         results = self.service.files().list(
@@ -140,7 +165,8 @@ class GDriveClient:
         items = self.list_folder_contents(folder_id)
         
         for item in items:
-            item_path = os.path.join(current_path, item.name) if current_path else item.name
+            safe_name = sanitize_filename(item.name)
+            item_path = os.path.join(current_path, safe_name) if current_path else safe_name
             item.path = item_path
             
             if progress_callback:
@@ -331,7 +357,8 @@ class GDriveClient:
         if not self.service:
             raise Exception("未认证，请先调用 authenticate()")
         
-        search_query = f"mimeType='application/vnd.google-apps.folder' and name contains '{query}' and trashed=false"
+        escaped_query = query.replace("\\", "\\\\").replace("'", "\\'")
+        search_query = f"mimeType='application/vnd.google-apps.folder' and name contains '{escaped_query}' and trashed=false"
         
         results = self.service.files().list(
             q=search_query,

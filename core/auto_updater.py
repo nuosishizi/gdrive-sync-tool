@@ -1,6 +1,8 @@
 """
 自动更新检查器 — 静默在后台运行，有新版本时弹窗提示
 """
+import re
+import urllib.parse
 import urllib.request
 import json
 from PyQt6.QtCore import QThread, pyqtSignal, QTimer
@@ -8,9 +10,10 @@ from PyQt6.QtCore import QThread, pyqtSignal, QTimer
 try:
     from version import APP_VERSION
 except ImportError:
-    APP_VERSION = "1.0.21"  # fallback
-GITHUB_RELEASES_API = "https://api.github.com/repos/secure-artifacts/google_tongbu/releases/latest"
+    APP_VERSION = "1.0.22"  # fallback
+GITHUB_RELEASES_API = "https://api.github.com/repos/nuosishizi/gdrive-sync-tool/releases/latest"
 CHECK_INTERVAL_HOURS = 6   # 每 6 小时静默检查一次
+_SAFE_TAG_RE = re.compile(r"^v?\d+(?:\.\d+)*(?:-[0-9A-Za-z._-]+)?$")
 
 
 def _parse_version(tag: str) -> tuple:
@@ -41,11 +44,11 @@ class UpdateCheckWorker(QThread):
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode())
 
-            latest_tag  = data.get("tag_name", "")
-            latest_name = data.get("name", latest_tag)
-            latest_body = data.get("body", "（无更新说明）")
+            latest_tag  = str(data.get("tag_name", "")).strip()
+            latest_name = str(data.get("name", latest_tag))
+            latest_body = str(data.get("body", "（无更新说明）"))
 
-            if not latest_tag:
+            if not latest_tag or not _SAFE_TAG_RE.match(latest_tag):
                 return
 
             if _parse_version(latest_tag) > _parse_version(self.current_version):
@@ -86,6 +89,10 @@ class AutoUpdater:
         from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QLabel, QTextEdit, QPushButton, QHBoxLayout
         import webbrowser
 
+        if not _SAFE_TAG_RE.match(tag):
+            return
+        safe_tag = urllib.parse.quote(tag, safe="")
+
         dlg = QDialog(self.parent)
         dlg.setWindowTitle("🎉 发现新版本！")
         dlg.setMinimumWidth(480)
@@ -112,7 +119,7 @@ class AutoUpdater:
         update_btn = QPushButton("🚀 立即下载新版本")
         update_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 6px 12px;")
         update_btn.clicked.connect(lambda: [
-            webbrowser.open(f"https://github.com/secure-artifacts/google_tongbu/releases/tag/{tag}"),
+            webbrowser.open(f"https://github.com/nuosishizi/gdrive-sync-tool/releases/tag/{safe_tag}"),
             dlg.accept()
         ])
         btn_layout.addWidget(update_btn)

@@ -2,12 +2,31 @@
 Rclone Wrapper - Interface to rclone.exe for stable cloud syncing
 """
 import os
+import hashlib
 import subprocess
 import json
 import time
 from typing import Optional, Callable, Dict, List
 from dataclasses import dataclass
-from utils.path_helpers import get_safe_path
+from utils.path_helpers import (
+    get_safe_path,
+    sanitize_filename,
+    validate_gdrive_id,
+    set_secure_file_permissions,
+)
+
+# 官方 Rclone v1.73.5 发布包 SHA-256 校验和（来自 https://downloads.rclone.org/v1.73.5/SHA256SUMS）
+RCLONE_VERSION = "v1.73.5"
+RCLONE_SHA256SUMS = {
+    "rclone-v1.73.5-windows-amd64.zip": "201567c54304935112b06dfac4ad754786287fb5acfad8889feca8d1cdeba92b",
+    "rclone-v1.73.5-windows-arm64.zip": "8805406a984115e7cfe3b021a20a983b7060a70f198484cf373d687b6f625923",
+    "rclone-v1.73.5-windows-386.zip": "58ab1aa37253f1cf33d9c33970c2dd693a744e0ca7111b4bfad0396f79d400f3",
+    "rclone-v1.73.5-osx-amd64.zip": "19c709563e455d8f8e343d5521e741afa7a77e37c6552ad8f7b03034f8bc214b",
+    "rclone-v1.73.5-osx-arm64.zip": "b9e265eb7a098743d0726c05c73fe207d355950fb8481e0b226c0c00173da1e8",
+    "rclone-v1.73.5-linux-amd64.zip": "932cf4b7484de74d82b4875488e0009469fd21f9904673385184520fe11a1bf0",
+    "rclone-v1.73.5-linux-arm64.zip": "8d465c921d95b2f54c5f2e79b24c97742ebc2082a0b8709a686361bed5ba7932",
+    "rclone-v1.73.5-linux-386.zip": "1479619fa2c41f7e3428ac7da29d4fc3e4220ead0ac44cd50897e4f90370beae",
+}
 
 
 @dataclass
@@ -53,7 +72,7 @@ class RcloneWrapper:
             elif os.path.exists(os.path.join(os.path.dirname(sys.executable), self.rclone_path)):
                 self.rclone_path = os.path.join(os.path.dirname(sys.executable), self.rclone_path)
                 
-        self.config_path = config_path
+        self.config_path = os.environ.get("RCLONE_CONFIG_PATH", config_path)
         self.process = None
         self.is_paused = False
         
@@ -67,7 +86,7 @@ class RcloneWrapper:
         os.makedirs(os.path.dirname(self.config_path) if os.path.dirname(self.config_path) else "config", exist_ok=True)
         
     def _ensure_rclone_exists(self, download_callback=None) -> bool:
-        """确保 rclone 存在，如果不存在则自动下载"""
+        """确保 rclone 存在，如果不存在则自动下载并校验 SHA-256"""
         import shutil, platform, urllib.request, zipfile, tempfile
         
         # 1. 检查当前设定的路径是否存在
@@ -107,28 +126,70 @@ class RcloneWrapper:
                 os_name = 'linux'
                 bin_name = 'rclone'
                 
-            # 下载最新稳定版 rclone
-            # rclone官方提供了统一的 zip 下载方式：https://downloads.rclone.org/v1.73.0/rclone-v1.73.0-windows-amd64.zip
-            download_url = f"https://downloads.rclone.org/v1.73.0/rclone-v1.73.0-{os_name}-{arch}.zip"
+            archive_name = f"rclone-{RCLONE_VERSION}-{os_name}-{arch}.zip"
+            expected_sha256 = RCLONE_SHA256SUMS.get(archive_name)
+            if not expected_sha256:
+                raise RuntimeError(f"不支持自动校验的平台架构包: {archive_name}")
+
+            urls = [
+                f"https://github.com/rclone/rclone/releases/download/{RCLONE_VERSION}/{archive_name}",
+                f"https://downloads.rclone.org/{RCLONE_VERSION}/{archive_name}",
+            ]
             
             with tempfile.TemporaryDirectory() as tmpdir:
                 zip_path = os.path.join(tmpdir, "rclone.zip")
-                print(f"[Rclone] 正在从 {download_url} 下载...")
+                last_err = None
+                for download_url in urls:
+                    try:
+                        print(f"[Rclone] 正在从 {download_url} 下载...")
+                        req = urllib.request.Request(
+                            download_url,
+                            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GDriveSync/1.0"}
+                        )
+                        with urllib.request.urlopen(req, timeout=60) as resp, open(zip_path, "wb") as out_f:
+                            totalsize = int(resp.headers.get("Content-Length", 0) or 0)
+                            downloaded = 0
+                            while True:
+                                chunk = resp.read(65536)
+                                if not chunk:
+                                    break
+                                out_f.write(chunk)
+                                downloaded += len(chunk)
+                                if download_callback:
+                                    download_callback("downloading", downloaded, totalsize)
+                        last_err = None
+                        break
+                    except Exception as dl_err:
+                        last_err = dl_err
+                        print(f"[Rclone] 从 {download_url} 下载失败: {dl_err}")
+                if last_err is not None:
+                    raise last_err
                 
-                def reporthook(blocknum, blocksize, totalsize):
-                    if download_callback:
-                        download_callback("downloading", blocknum * blocksize, totalsize)
-                        
-                urllib.request.urlretrieve(download_url, zip_path, reporthook=reporthook)
-                
+                # 校验下载文件 SHA-256 完整性
+                sha256_hash = hashlib.sha256()
+                with open(zip_path, "rb") as f:
+                    for chunk in iter(lambda: f.read(65536), b""):
+                        sha256_hash.update(chunk)
+                actual_sha256 = sha256_hash.hexdigest().lower()
+                if actual_sha256 != expected_sha256.lower():
+                    raise ValueError(
+                        f"Rclone 下载包 SHA-256 校验失败！预期: {expected_sha256}, 实际: {actual_sha256}"
+                    )
+                print(f"[Rclone] ✓ SHA-256 校验通过: {actual_sha256}")
+
                 if download_callback:
                     download_callback("extracting", 0, 0)
                 
+                real_tmpdir = os.path.realpath(tmpdir)
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                    zip_ref.extractall(tmpdir)
+                    for member in zip_ref.infolist():
+                        target_member_path = os.path.realpath(os.path.join(real_tmpdir, member.filename))
+                        if os.path.commonpath([real_tmpdir, target_member_path]) != real_tmpdir:
+                            raise ValueError(f"检测到压缩包路径穿越 (Zip Slip): {member.filename}")
+                    zip_ref.extractall(real_tmpdir)
                 
                 # 在解压出的文件夹中寻找可执行文件
-                for root, dirs, files in os.walk(tmpdir):
+                for root, dirs, files in os.walk(real_tmpdir):
                     if bin_name in files:
                         src_bin = os.path.join(root, bin_name)
                         ds_bin = os.path.join(os.getcwd(), bin_name)
@@ -165,6 +226,39 @@ class RcloneWrapper:
         except Exception as e:
             return f"Error: {e}"
     
+    def _write_remote_config(self, remote_name: str, app_id: str, app_key: str, token_json: str) -> None:
+        """
+        直接将远程配置写入配置文件并设置仅当前用户可读写权限，
+        避免通过命令行参数传递 token / client_secret 导致进程列表泄露。
+        """
+        import re
+        if not re.match(r'^[a-zA-Z0-9_-]{1,64}$', remote_name):
+            raise ValueError(f"非法的远程名称: {remote_name!r}")
+        # 确保 token_json 是单行合法 JSON，防止 INI 注入
+        parsed_token = json.loads(token_json)
+        compact_token = json.dumps(parsed_token, separators=(',', ':'))
+
+        config_dir = os.path.dirname(self.config_path)
+        if config_dir:
+            os.makedirs(config_dir, exist_ok=True)
+
+        lines = [
+            f"[{remote_name}]",
+            "type = drive",
+            "scope = drive",
+            f"token = {compact_token}",
+        ]
+        if app_id and app_key:
+            clean_id = str(app_id).replace("\r", "").replace("\n", "").strip()
+            clean_key = str(app_key).replace("\r", "").replace("\n", "").strip()
+            lines.append(f"client_id = {clean_id}")
+            lines.append(f"client_secret = {clean_key}")
+
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+
+        set_secure_file_permissions(self.config_path)
+
     def setup_remote(self, remote_name: str, app_id: str, app_key: str, auth_data: str) -> bool:
         """
         手动设置一个新的Rclone远程连接（主要是为了向下兼容）
@@ -179,38 +273,9 @@ class RcloneWrapper:
             是否成功
         """
         try:
-            import subprocess
-            import os
-            
-            os.makedirs(os.path.dirname(self.config_path) if os.path.dirname(self.config_path) else ".", exist_ok=True)
-            
-            cmd = [
-                self.rclone_path, 
-                "--config", self.config_path, 
-                "config", "create", 
-                remote_name, "drive", 
-                "scope", "drive", 
-                "token", auth_data
-            ]
-            
-            if app_id and app_key:
-                cmd.extend(["client_id", app_id, "client_secret", app_key])
-                
-            # 隐藏命令行窗口
-            startupinfo = None
-            if os.name == 'nt':
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                
-            result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
-            
-            if result.returncode == 0:
-                print(f"[Rclone] 已创建配置: {remote_name}")
-                return self.test_remote(remote_name)
-            else:
-                print(f"[Rclone] 设置远程失败: {result.stderr}")
-                return False
-            
+            self._write_remote_config(remote_name, app_id, app_key, auth_data)
+            print(f"[Rclone] 已创建配置: {remote_name}")
+            return self.test_remote(remote_name)
         except Exception as e:
             print(f"[Rclone] 设置远程失败: {e}")
             return False
@@ -234,7 +299,6 @@ class RcloneWrapper:
             creds = gdrive_client.creds
             
             # 构建token JSON
-            import json
             token_dict = {
                 "access_token": creds.token,
                 "token_type": "Bearer",
@@ -243,39 +307,12 @@ class RcloneWrapper:
             }
             token_json = json.dumps(token_dict)
             
-            # 获取client_id和client_secret并使用不易被扫描器标记的变量名
             app_id = creds.client_id or ""
             app_key = creds.client_secret or ""
             
-            import subprocess
-            import os
-            os.makedirs(os.path.dirname(self.config_path) if os.path.dirname(self.config_path) else ".", exist_ok=True)
-            
-            cmd = [
-                self.rclone_path, 
-                "--config", self.config_path, 
-                "config", "create", 
-                remote_name, "drive", 
-                "scope", "drive", 
-                "token", token_json
-            ]
-            
-            if app_id and app_key:
-                cmd.extend(["client_id", app_id, "client_secret", app_key])
-                
-            startupinfo = None
-            if os.name == 'nt':
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                
-            result = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
-            
-            if result.returncode == 0:
-                print(f"[Rclone] ✓ 自动生成配置: {remote_name}")
-                return self.test_remote(remote_name)
-            else:
-                print(f"[Rclone] 自动配置失败: {result.stderr}")
-                return False
+            self._write_remote_config(remote_name, app_id, app_key, token_json)
+            print(f"[Rclone] ✓ 自动生成配置: {remote_name}")
+            return self.test_remote(remote_name)
             
         except Exception as e:
             print(f"[Rclone] 自动配置失败: {e}")
@@ -485,9 +522,10 @@ class RcloneWrapper:
                 "--name-transform", r"all,regex=^(.{235}).+(\.[^.]{1,10})$/$1$2",  # 截断超长文件名但保留扩展名（/分隔符）
             ]
             
-            # 如果指定了特定文件夹（且不是根目录），则添加过滤
+            # 如果指定了特定文件夹（且不是根目录），则校验ID并添加过滤（防止参数注入）
             if remote_path and remote_path != "root":
-                cmd.extend(["--drive-root-folder-id", remote_path])
+                safe_remote_id = validate_gdrive_id(remote_path)
+                cmd.append(f"--drive-root-folder-id={safe_remote_id}")
             
             # 带宽限制
             if download_settings.get('bwlimit_enabled', False):
@@ -915,7 +953,371 @@ class RcloneWrapper:
             import traceback
             traceback.print_exc()
             return False
-    
+
+    def upload_item(self, 
+                    local_path: str,
+                    remote_folder_id: str,
+                    remote_name: str = "gdrive",
+                    is_dir: bool = False,
+                    progress_callback: Optional[Callable[[RcloneStats], None]] = None,
+                    event_callback: Optional[Callable[[str, str, str], None]] = None,
+                    stop_flag: Optional[Callable[[], bool]] = None,
+                    log_callback: Optional[Callable[[str, str], None]] = None) -> bool:
+        """
+        上传文件或文件夹到指定的 Google Drive 文件夹下
+        """
+        try:
+            # Helper for logging
+            def log(msg, prefix="ℹ"):
+                if log_callback:
+                    log_callback(msg, prefix)
+                else:
+                    print(f"[Rclone] {msg}")
+
+            # 加载设置
+            settings = getattr(self, 'settings', None)
+            if not settings:
+                # 尝试从文件加载
+                settings_file = "config/app_settings.json"
+                if os.path.exists(settings_file):
+                    import json
+                    with open(settings_file, 'r', encoding='utf-8') as f:
+                        settings = json.load(f)
+            
+            # 默认设置
+            rclone_settings = settings.get('rclone', {}) if settings else {}
+            download_settings = settings.get('download', {}) if settings else {}
+            
+            checkers = rclone_settings.get('checkers', 8)
+            transfers = rclone_settings.get('transfers', 4)
+            chunk_size = rclone_settings.get('chunk_size', 64)
+            retries = rclone_settings.get('retries', 10)
+            low_level_retries = rclone_settings.get('low_level_retries', 10)
+            
+            # 使用绝对路径和长路径前缀
+            local_path_safe = get_safe_path(local_path)
+            base_name = sanitize_filename(os.path.basename(local_path.rstrip("/\\")))
+            
+            # 构建rclone命令
+            if is_dir:
+                # 拷贝文件夹到网盘下（会在网盘创建同名文件夹）
+                cmd = [
+                    self.rclone_path, "copy",
+                    local_path_safe,
+                    f"{remote_name}:{base_name}",
+                ]
+            else:
+                # 拷贝单文件到网盘下
+                cmd = [
+                    self.rclone_path, "copyto",
+                    local_path_safe,
+                    f"{remote_name}:{base_name}",
+                ]
+                
+            cmd.extend([
+                "--config", self.config_path,
+                "--progress",
+                "--stats", "1s",
+                "--retries", str(retries),
+                "--low-level-retries", str(low_level_retries),
+                "--checkers", str(checkers),
+                "--transfers", str(transfers),
+                "--drive-chunk-size", f"{chunk_size}M",
+                "-v",
+                "--ignore-case-sync",
+                "--local-encoding", "None",
+            ])
+
+            
+            # 目标文件夹ID限制（防止参数注入）
+            if remote_folder_id and remote_folder_id != "root":
+                safe_remote_id = validate_gdrive_id(remote_folder_id)
+                cmd.append(f"--drive-root-folder-id={safe_remote_id}")
+            
+            # 带宽限制
+            if download_settings.get('bwlimit_enabled', False):
+                bwlimit = download_settings.get('bwlimit', 0)
+                if bwlimit > 0:
+                    cmd.extend(["--bwlimit", f"{bwlimit}M"])
+            
+            log(f"执行上传命令: {' '.join(cmd)}", "🚀")
+            
+            # 启动进程
+            kwargs = {}
+            if os.name == 'nt':
+                kwargs['creationflags'] = 0x08000000 # CREATE_NO_WINDOW
+ 
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                encoding='utf-8',
+                errors='ignore',
+                bufsize=1,
+                **kwargs
+            )
+            log("Rclone 上传进程已启动", "✓")
+            
+            # 记录详细日志到本地文件，方便排查
+            from datetime import datetime
+            log_filepath = "rclone_upload.log"
+            try:
+                with open(log_filepath, "a", encoding="utf-8") as log_file:
+                    log_file.write(f"\n--- Upload started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+                    log_file.write(f"Command: {' '.join(cmd)}\n")
+            except Exception as e:
+                print(f"写入日志文件失败: {e}")
+            
+            # 读取输出并解析 (逻辑与 sync_folder 相同)
+            current_stats = {
+                'bytes_transferred': 0,
+                'total_bytes': 0,
+                'speed': 0,
+                'eta': 0,
+                'errors': 0,
+                'transfers_active': 0,
+                'transfers_complete': 0,
+                'elapsed_time': 0,
+                'transferring': []
+            }
+            
+            in_transferring_section = False
+            
+            for line in self.process.stdout:
+                if stop_flag and stop_flag():
+                    log("收到停止信号", "⏹")
+                    self.stop()
+                    return False
+                
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # 写入日志文件
+                try:
+                    with open(log_filepath, "a", encoding="utf-8") as log_file:
+                        log_file.write(line + "\n")
+                except Exception:
+                    pass
+                
+                # 打印原始日志（用于调试）
+                log(f"[RAW] {line}", "📝")
+
+                
+                # 解析成功、失败、跳过等事件
+                try:
+                    if ": Copied" in line:
+                        parts = line.split(": Copied")
+                        prefix = parts[0]
+                        extra_info = parts[1].strip() if len(parts) > 1 else ""
+                        last_colon_index = prefix.rfind(" : ")
+                        if last_colon_index != -1:
+                             file_name = prefix[last_colon_index + 3:].strip()
+                             if event_callback:
+                                event_callback("success", f"已完成: {file_name} {extra_info}", "INFO")
+                        else:
+                             file_name = prefix.strip()
+                             if event_callback:
+                                event_callback("success", f"已完成: {file_name} {extra_info}", "INFO")
+
+                    elif ": Unchanged skipping" in line:
+                        parts = line.split(": Unchanged skipping")
+                        prefix = parts[0]
+                        last_colon_index = prefix.rfind(" : ")
+                        if last_colon_index != -1:
+                             file_name = prefix[last_colon_index + 3:].strip()
+                        else:
+                             file_name = prefix.strip()
+                        if event_callback:
+                            event_callback("info", f"跳过: {file_name}", "INFO")
+                    
+                    elif "ERROR :" in line or "Failed to copy" in line:
+                         error_msg = line
+                         file_name = "Unknown"
+                         if "Failed to copy:" in line:
+                             parts = line.split("Failed to copy:")
+                             error_detail = parts[1].strip()
+                             prefix = parts[0]
+                             prefix = prefix.replace("ERROR :", "").strip()
+                             last_colon_index = prefix.rfind(" : ")
+                             if last_colon_index != -1:
+                                 file_name = prefix[last_colon_index + 3:].strip()
+                             elif prefix.endswith(":"):
+                                 file_name = prefix[:-1].strip()
+                             else:
+                                 file_name = prefix
+                             error_msg = f"{file_name} -> {error_detail}"
+                         if event_callback:
+                            event_callback("error", f"失败: {error_msg}", "ERROR")
+
+                except Exception:
+                    pass
+
+                # 解析传输部分
+                if line.startswith("Transferring:"):
+                    in_transferring_section = True
+                    current_stats['transferring'] = []
+                    continue
+
+                if in_transferring_section and line.startswith("*"):
+                    try:
+                        file_line = line[2:].strip()
+                        file_name = ""
+                        percentage = "0%"
+                        size = "-"
+                        speed = "-"
+                        eta = "-"
+                        status = "等待中"
+                        
+                        if file_line.endswith(": transferring"):
+                            file_name = file_line[:-14].strip()
+                            status = "准备传输"
+                        else:
+                            last_colon = file_line.rfind(':')
+                            if last_colon != -1:
+                                potential_progress = file_line[last_colon+1:].strip()
+                                if "%" in potential_progress or "transferring" in potential_progress:
+                                    file_name = file_line[:last_colon].strip()
+                                    progress_info = potential_progress
+                                    
+                                    if "transferring" in progress_info:
+                                        status = "准备传输"
+                                    else:
+                                        status = "传输中"
+                                        parts = [p.strip() for p in progress_info.split(',')]
+                                        if len(parts) >= 1:
+                                            part0 = parts[0]
+                                            if '%' in part0 and '/' in part0:
+                                                prog_parts = part0.split('/')
+                                                if len(prog_parts) >= 1: percentage = prog_parts[0].strip()
+                                                if len(prog_parts) >= 2: size = prog_parts[1].strip()
+                                                if len(parts) >= 2: speed = parts[1].strip()
+                                                if len(parts) >= 3: eta = parts[2].strip()
+                                            elif '/' in part0:
+                                                prog_parts = part0.split('/')
+                                                if len(prog_parts) >= 2: size = prog_parts[1].strip()
+                                                if len(parts) >= 2 and '%' in parts[1]:
+                                                    percentage = parts[1].strip()
+                                                    if len(parts) >= 3: speed = parts[2].strip()
+                                                    if len(parts) >= 4: eta = parts[3].strip()
+                            else:
+                                continue
+
+                        current_stats['transferring'].append({
+                            'name': file_name,
+                            'percentage': percentage,
+                            'size': size,
+                            'speed': speed,
+                            'eta': eta,
+                            'status': status
+                        })
+                    except Exception:
+                        pass
+                    continue
+
+                # 解析全局 Bytes
+                if "Transferred:" in line and "100%" not in line and "%" in line:
+                    if "ETA" in line:
+                        in_transferring_section = False
+                        try:
+                            import re
+                            parts = line.split(',')
+                            if len(parts) >= 1 and '/' in parts[0]:
+                                counts_part = parts[0].replace("Transferred:", "").strip()
+                                transferred_str, total_str = counts_part.split('/')
+                                
+                                def parse_rclone_size(s):
+                                    s = s.strip()
+                                    match = re.match(r'(\d+\.?\d*)\s*(\w+)?', s)
+                                    if match:
+                                        val = float(match.group(1))
+                                        unit = match.group(2)
+                                        if unit:
+                                            unit = unit.strip().upper()
+                                            if 'K' in unit: val *= 1024
+                                            elif 'M' in unit: val *= 1024 * 1024
+                                            elif 'G' in unit: val *= 1024 * 1024 * 1024
+                                        return int(val)
+                                    return 0
+
+                                current_stats['bytes_transferred'] = parse_rclone_size(transferred_str)
+                                current_stats['total_bytes'] = parse_rclone_size(total_str)
+                            
+                            speed_match = re.search(r'(\d+\.?\d*)\s*(\w+)/s', line)
+                            if speed_match:
+                                current_stats['speed'] = parse_rclone_size(f"{speed_match.group(1)} {speed_match.group(2)}")
+                            
+                            eta_match = re.search(r'ETA\s+([\w\s]+)', line)
+                            if eta_match:
+                                eta_str = eta_match.group(1).strip()
+                                current_stats['eta'] = 0
+                                if 's' in eta_str or 'm' in eta_str or 'h' in eta_str:
+                                    total_seconds = 0
+                                    try:
+                                        t_parts = re.findall(r'(\d+)([hms])', eta_str)
+                                        for val, unit in t_parts:
+                                            if unit == 'h': total_seconds += int(val) * 3600
+                                            elif unit == 'm': total_seconds += int(val) * 60
+                                            elif unit == 's': total_seconds += int(val)
+                                        current_stats['eta'] = total_seconds
+                                    except:
+                                        pass
+                        except Exception:
+                            pass
+                    else:
+                        # Files 行
+                        try:
+                            parts = line.split(',')
+                            if len(parts) >= 1 and '/' in parts[0]:
+                                counts_part = parts[0].replace("Transferred:", "").strip()
+                                finished_str, total_str = counts_part.split('/')
+                                current_stats['transfers_complete'] = int(finished_str.strip())
+                                current_stats['total_files'] = int(total_str.strip())
+                        except Exception:
+                            pass
+                
+                # 解析 Errors
+                if line.startswith("Errors:"):
+                    try:
+                        errors_str = line.replace("Errors:", "").strip()
+                        current_stats['errors'] = int(errors_str)
+                    except:
+                        pass
+                
+                # 发送进度
+                if progress_callback and (("Transferred:" in line) or (line.startswith("*") and in_transferring_section)):
+                    stats = RcloneStats(
+                        bytes_transferred=current_stats['bytes_transferred'],
+                        total_bytes=current_stats['total_bytes'],
+                        speed=current_stats['speed'],
+                        eta=current_stats['eta'],
+                        errors=current_stats['errors'],
+                        transfers_active=len(current_stats['transferring']),
+                        transfers_complete=current_stats['transfers_complete'],
+                        elapsed_time=current_stats['elapsed_time'],
+                        transferring=list(current_stats['transferring'])
+                    )
+                    stats.total_files = current_stats.get('total_files', 0)
+                    progress_callback(stats)
+            
+            # 等待进程结束
+            return_code = self.process.wait()
+            self.process = None
+            
+            if return_code == 0:
+                log("上传完成", "✓")
+                return True
+            else:
+                log(f"上传失败，退出代码: {return_code}", "✗")
+                return False
+                
+        except Exception as e:
+            if 'log' in locals():
+                log(f"上传异常: {e}", "✗")
+            import traceback
+            traceback.print_exc()
+            return False
+
     def stop(self):
         """停止当前操作"""
         if self.process and self.process.poll() is None:

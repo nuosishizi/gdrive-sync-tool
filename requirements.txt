@@ -2,5 +2,10 @@ PyQt6>=6.6.0
 google-auth>=2.25.0
 google-auth-oauthlib>=1.2.0
 google-api-python-client>=2.110.0
-schedule>=1.2.0
-python-dateutil>=2.8.0
+requests>=2.33.0
+urllib3>=2.6.0
+cryptography>=46.0.7
+protobuf>=5.29.6,<6.0.0
+python-dateutil>=2.9.0.post0
+
+

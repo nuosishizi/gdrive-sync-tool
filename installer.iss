@@ -1,6 +1,6 @@
 [Setup]
 AppName=Google Drive Sync
-AppVersion=1.0.21
+AppVersion=1.0.22
 DefaultDirName={autopf}\GDriveSync
 DefaultGroupName=GDriveSync
 UninstallDisplayIcon={app}\GDriveSync.exe
@@ -12,7 +12,7 @@ SetupIconFile=app_icon.ico
 PrivilegesRequired=lowest
 
 [Files]
-Source: "dist\GDriveSync\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\GDriveSync\*"; DestDir: "{app}"; Excludes: "*.conf,*.pickle,*.db,*.db-journal,*.db-shm,*.db-wal,*.log,credentials.json,token.json,app_config.json,app_settings.json,tasks.json"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
